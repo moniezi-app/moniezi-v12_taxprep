@@ -8134,8 +8134,10 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                        <div className="flex justify-between items-center"><span className="text-emerald-700 dark:text-emerald-300">State Tax (Optional)</span><span className="font-bold text-emerald-900 dark:text-emerald-100 text-lg">{settings.stateTaxRate}%</span></div>
                        <div className="flex justify-between items-center"><span className="text-emerald-700 dark:text-emerald-300 flex items-center gap-1">Self-Employment Tax <HelpCircle size={14} className="cursor-help" title="Social Security (12.4%) + Medicare (2.9%)" /></span><span className="font-bold text-emerald-900 dark:text-emerald-100 text-lg">~15.3%</span></div>
                        <div className="h-px bg-emerald-200 dark:bg-emerald-800 my-1" />
-                       <div className="flex justify-between items-center bg-emerald-100 dark:bg-emerald-900/20 -mx-2 px-2 py-2 rounded"><span className="font-bold uppercase text-xs tracking-wider text-emerald-900 dark:text-emerald-100">Combined Planning Rate</span>
-                    </div>
+                      <div className="flex justify-between items-center bg-emerald-100 dark:bg-emerald-900/20 -mx-2 px-2 py-2 rounded">
+                        <span className="font-bold uppercase text-xs tracking-wider text-emerald-900 dark:text-emerald-100">Combined Planning Rate</span>
+                        <span className="font-extrabold text-2xl text-emerald-900 dark:text-emerald-100">{(settings.taxRate + settings.stateTaxRate + 15.3).toFixed(1)}%</span>
+                      </div>
 
                     {/* Tax Prep / Audit Readiness Settings */}
                     <div className="mt-6 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
@@ -8164,7 +8166,6 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       </div>
                     </div>
 
-<span className="font-extrabold text-2xl text-emerald-900 dark:text-emerald-100">{(settings.taxRate + settings.stateTaxRate + 15.3).toFixed(1)}%</span></div>
                     </div>
                  </div>
                 </div>
