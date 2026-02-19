@@ -8,9 +8,11 @@ export interface Transaction {
   name: string;
   category: string;
   amount: number;
-  notes?: string;
   type: TransactionType;
+  notes?: string;
+  receiptId?: string; // linked receipt id (IndexedDB)
 }
+
 
 export type InvoiceStatus = 'unpaid' | 'paid' | 'void';
 
@@ -160,6 +162,12 @@ export interface UserSettings {
   filingStatus: FilingStatus;
   currencySymbol: string;
 
+
+  // --- Tax Prep / Audit Readiness ---
+  requireReceiptOverThreshold?: boolean;
+  receiptThreshold?: number; // dollars
+  mileageRateCents?: number; // cents per mile (can be decimal, e.g. 72.5)
+
   // Invoice Defaults
   defaultInvoiceTerms?: string;
   defaultInvoiceNotes?: string;
@@ -177,6 +185,15 @@ export interface TaxPayment {
   amount: number;
   type: 'Estimated' | 'Annual' | 'Other';
   note?: string;
+}
+
+export interface MileageTrip {
+  id: string;
+  date: string; // YYYY-MM-DD
+  miles: number;
+  purpose: string;
+  client?: string;
+  notes?: string;
 }
 
 export interface Receipt {

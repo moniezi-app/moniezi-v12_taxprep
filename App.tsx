@@ -81,7 +81,7 @@ import {
   Copy,
   ClipboardList
 } from 'lucide-react';
-import { Page, Transaction, Invoice, Estimate, Client, ClientStatus, UserSettings, Notification, FilterPeriod, RecurrenceFrequency, FilingStatus, TaxPayment, TaxEstimationMethod, InvoiceItem, EstimateItem, CustomCategories, Receipt as ReceiptType } from './types';
+import { Page, Transaction, Invoice, Estimate, Client, ClientStatus, UserSettings, Notification, FilterPeriod, RecurrenceFrequency, FilingStatus, TaxPayment, TaxEstimationMethod, InvoiceItem, EstimateItem, CustomCategories, Receipt as ReceiptType, MileageTrip } from './types';
 import { CATS_IN, CATS_OUT, CATS_BILLING, DEFAULT_PAY_PREFS, DB_KEY, TAX_CONSTANTS, TAX_PLANNER_2026, getFreshDemoData } from './constants';
 import InsightsDashboard from './InsightsDashboard';
 import { getInsightCount } from './services/insightsEngine';
@@ -188,6 +188,146 @@ const downloadReceiptToDevice = (dataUrl: string) => {
         return false;
     }
 };
+
+// --- Utility: Download Blob ---
+const downloadBlob = (blob: Blob, filename: string) => {
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
+const escapeCsv = (value: any) => {
+  const s = String(value ?? '');
+  if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+};
+
+const makeCsvBlob = (rows: any[][]) => {
+  const lines = rows.map(r => r.map(escapeCsv).join(',')).join('\n');
+  return new Blob([lines], { type: 'text/csv;charset=utf-8' });
+};
+
+// --- Utility: Minimal ZIP (stored / no compression) ---
+// Creates a valid ZIP without external dependencies (bigger files, but works offline).
+const crc32 = (() => {
+  const table = new Uint32Array(256).map((_, i) => {
+    let c = i;
+    for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    return c >>> 0;
+  });
+  return (data: Uint8Array) => {
+    let c = 0xFFFFFFFF;
+    for (let i = 0; i < data.length; i++) c = table[(c ^ data[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  };
+})();
+
+const toDosTimeDate = (d: Date) => {
+  const year = d.getFullYear();
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const hours = d.getHours();
+  const minutes = d.getMinutes();
+  const seconds = Math.floor(d.getSeconds() / 2);
+  const dosTime = (hours << 11) | (minutes << 5) | seconds;
+  const dosDate = ((year - 1980) << 9) | (month << 5) | day;
+  return { dosTime, dosDate };
+};
+
+const u16 = (n: number) => [n & 0xFF, (n >>> 8) & 0xFF];
+const u32 = (n: number) => [n & 0xFF, (n >>> 8) & 0xFF, (n >>> 16) & 0xFF, (n >>> 24) & 0xFF];
+
+const utf8 = (s: string) => new TextEncoder().encode(s);
+
+const createZipBlobUncompressed = (files: { name: string; data: Uint8Array; mtime?: Date }[]) => {
+  const parts: Uint8Array[] = [];
+  const central: Uint8Array[] = [];
+  let offset = 0;
+
+  const push = (arr: number[] | Uint8Array) => {
+    const u = arr instanceof Uint8Array ? arr : new Uint8Array(arr);
+    parts.push(u);
+    offset += u.length;
+  };
+
+  for (const f of files) {
+    const nameBytes = utf8(f.name);
+    const mtime = f.mtime || new Date();
+    const { dosTime, dosDate } = toDosTimeDate(mtime);
+    const crc = crc32(f.data);
+    const size = f.data.length;
+
+    const localHeader = new Uint8Array([
+      ...u32(0x04034b50),
+      ...u16(20),
+      ...u16(0x0800), // UTF-8
+      ...u16(0), // store
+      ...u16(dosTime),
+      ...u16(dosDate),
+      ...u32(crc),
+      ...u32(size),
+      ...u32(size),
+      ...u16(nameBytes.length),
+      ...u16(0),
+    ]);
+
+    const localOffset = offset;
+    push(localHeader);
+    push(nameBytes);
+    push(f.data);
+
+    const centralHeader = new Uint8Array([
+      ...u32(0x02014b50),
+      ...u16(20),
+      ...u16(20),
+      ...u16(0x0800),
+      ...u16(0),
+      ...u16(dosTime),
+      ...u16(dosDate),
+      ...u32(crc),
+      ...u32(size),
+      ...u32(size),
+      ...u16(nameBytes.length),
+      ...u16(0),
+      ...u16(0),
+      ...u16(0),
+      ...u16(0),
+      ...u32(0),
+      ...u32(localOffset),
+    ]);
+
+    central.push(centralHeader, nameBytes);
+  }
+
+  const centralStart = offset;
+  for (const c of central) {
+    parts.push(c);
+    offset += c.length;
+  }
+  const centralSize = offset - centralStart;
+  const fileCount = files.length;
+
+  const end = new Uint8Array([
+    ...u32(0x06054b50),
+    ...u16(0),
+    ...u16(0),
+    ...u16(fileCount),
+    ...u16(fileCount),
+    ...u32(centralSize),
+    ...u32(centralStart),
+    ...u16(0),
+  ]);
+
+  parts.push(end);
+
+  return new Blob(parts, { type: 'application/zip' });
+};
+
 
 // --- Utility: Date Helpers ---
 const getStartOfWeek = (date: Date) => {
@@ -675,6 +815,7 @@ export default function App() {
   const [customCategories, setCustomCategories] = useState<CustomCategories>({ income: [], expense: [], billing: [] });
   const [taxPayments, setTaxPayments] = useState<TaxPayment[]>([]);
   const [receipts, setReceipts] = useState<ReceiptType[]>([]);
+  const [mileageTrips, setMileageTrips] = useState<MileageTrip[]>([]);
   // Receipt image URLs (runtime-only). Stored images live in IndexedDB.
   const [receiptPreviewUrls, setReceiptPreviewUrls] = useState<Record<string, string>>({});
 
@@ -796,6 +937,8 @@ export default function App() {
   const logoInputRef = useRef<HTMLInputElement>(null);
   
   const [scrollToTaxSnapshot, setScrollToTaxSnapshot] = useState(false);
+  const [taxPrepYear, setTaxPrepYear] = useState<number>(new Date().getFullYear());
+  const [newTrip, setNewTrip] = useState<any>({ date: new Date().toISOString().split('T')[0], miles: '', purpose: '', client: '', notes: '' });
   const taxSnapshotRef = useRef<HTMLDivElement>(null);
 
   // Backup & Restore State
@@ -1314,6 +1457,9 @@ export default function App() {
           showLogoOnInvoice: true,
           logoAlignment: 'left',
           brandColor: '#2563eb',
+          requireReceiptOverThreshold: true,
+          receiptThreshold: 0,
+          mileageRateCents: 72.5,
           ...parsedSettings,
         });
       };
@@ -1360,6 +1506,8 @@ export default function App() {
 
           if (!cancelled) setReceipts(migrated);
 
+          if (!cancelled) setMileageTrips(parsed.mileageTrips || []);
+
           if (migratedAny) {
             try {
               const receiptsMeta = migrated.map(r => ({ id: r.id, date: r.date, imageKey: r.imageKey, mimeType: r.mimeType, note: r.note }));
@@ -1384,6 +1532,8 @@ export default function App() {
         setCustomCategories({ income: [], expense: [], billing: [] });
         setReceipts([]);
         applyDefaults(null);
+        setMileageTrips([]);
+        applyDefaults(null);
       }
 
       if (!cancelled) setDataLoaded(true);
@@ -1400,7 +1550,7 @@ export default function App() {
     if (dataLoaded) {
       try {
         const receiptsMeta = receipts.map(r => ({ id: r.id, date: r.date, imageKey: r.imageKey, mimeType: r.mimeType, note: r.note }));
-        localStorage.setItem(DB_KEY, JSON.stringify({ transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts: receiptsMeta }));
+        localStorage.setItem(DB_KEY, JSON.stringify({ transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts: receiptsMeta, mileageTrips }));
       } catch (e) {
         console.error("Save failed (storage quota?)", e);
         showToast("Warning: Could not save data (storage limit). Export a backup now.", "warning");
@@ -2726,13 +2876,40 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
   const saveTransaction = (data: Partial<Transaction>) => {
     if (!data.name?.trim()) return showToast("Please enter a description", "error");
     if (!data.amount || Number(data.amount) <= 0) return showToast("Please enter a valid amount", "error");
-    const newTx: Transaction = { id: generateId('tx'), name: data.name, amount: Number(data.amount), category: data.category || "General", date: data.date || new Date().toISOString().split('T')[0], type: (data.type as any) || 'income', notes: data.notes };
+    const isExpense = ((data.type as any) || activeTab) === 'expense';
+    const requireReceipt = settings.requireReceiptOverThreshold ?? true;
+    const threshold = Number(settings.receiptThreshold ?? 0);
+    const amt = Number(data.amount);
+    if (isExpense && requireReceipt && amt >= threshold && !data.receiptId) {
+      return showToast("Receipt is required for this expense. Link or scan a receipt.", "error");
+    }
+    const newTx: Transaction = { id: generateId('tx'), name: data.name, amount: Number(data.amount), category: data.category || "General", date: data.date || new Date().toISOString().split('T')[0], type: (data.type as any) || 'income', notes: data.notes, receiptId: data.receiptId };
     if (drawerMode === 'edit_tx' && activeItem.id) {
       setTransactions(prev => prev.map(t => t.id === activeItem.id ? { ...t, ...newTx, id: t.id } as Transaction : t)); showToast("Transaction updated", "success");
     } else {
       setTransactions(prev => [newTx, ...prev]); showToast("Transaction saved", "success");
     }
     setIsDrawerOpen(false);
+  };
+
+  // --- Mileage Trips ---
+  const addMileageTrip = (trip: Omit<MileageTrip, 'id'>) => {
+    if (!trip.date) return showToast('Please select a date', 'error');
+    if (!trip.purpose?.trim()) return showToast('Please enter a purpose', 'error');
+    if (!trip.miles || Number(trip.miles) <= 0) return showToast('Please enter valid miles', 'error');
+    const newTrip: MileageTrip = { id: generateId('mi'), ...trip, miles: Number(trip.miles) };
+    setMileageTrips(prev => [newTrip, ...prev]);
+    showToast('Mileage trip saved', 'success');
+  };
+
+  const updateMileageTrip = (id: string, patch: Partial<MileageTrip>) => {
+    setMileageTrips(prev => prev.map(t => t.id === id ? ({ ...t, ...patch, miles: patch.miles !== undefined ? Number(patch.miles) : t.miles } as MileageTrip) : t));
+  };
+
+  const deleteMileageTrip = (id: string) => {
+    if (!confirm('Delete this mileage trip?')) return;
+    setMileageTrips(prev => prev.filter(t => t.id !== id));
+    showToast('Mileage trip deleted', 'info');
   };
 
   const duplicateTransaction = (original: Transaction) => {
@@ -3290,6 +3467,116 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
     setPlExportRequested(true);
     setShowPLPreview(true);
   };
+
+  // --- Tax Prep Exports ---
+  const txForTaxYear = useMemo(() => {
+    return transactions.filter(t => {
+      const y = new Date(t.date).getFullYear();
+      return y === taxPrepYear;
+    });
+  }, [transactions, taxPrepYear]);
+
+  const mileageForTaxYear = useMemo(() => {
+    return mileageTrips.filter(t => new Date(t.date).getFullYear() === taxPrepYear);
+  }, [mileageTrips, taxPrepYear]);
+
+  const handleExportTaxLedgerCSV = () => {
+    const rows: any[][] = [
+      ['date', 'type', 'name', 'category', 'amount', 'notes', 'receiptId'],
+      ...txForTaxYear
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(t => [t.date, t.type, t.name, t.category, t.amount, t.notes || '', (t as any).receiptId || ''])
+    ];
+    downloadBlob(makeCsvBlob(rows), `MONIEZI_TaxLedger_${taxPrepYear}.csv`);
+    showToast(`Exported Tax Ledger CSV for ${taxPrepYear}`, 'success');
+  };
+
+  const handleExportMileageCSV = () => {
+    const rateCents = Number(settings.mileageRateCents ?? 72.5);
+    const rows: any[][] = [
+      ['date', 'miles', 'rate_cents_per_mile', 'deduction', 'purpose', 'client', 'notes'],
+      ...mileageForTaxYear
+        .slice()
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .map(t => {
+          const deduction = (Number(t.miles) * (rateCents / 100));
+          return [t.date, t.miles, rateCents, deduction.toFixed(2), t.purpose, t.client || '', t.notes || ''];
+        })
+    ];
+    downloadBlob(makeCsvBlob(rows), `MONIEZI_Mileage_${taxPrepYear}.csv`);
+    showToast(`Exported Mileage CSV for ${taxPrepYear}`, 'success');
+  };
+
+  const handleExportReceiptsZip = async () => {
+    const receiptIds = Array.from(new Set(txForTaxYear.filter(t => t.type === 'expense' && (t as any).receiptId).map(t => (t as any).receiptId as string)));
+    if (receiptIds.length === 0) return showToast('No linked receipts found for this tax year.', 'info');
+
+    const files: { name: string; data: Uint8Array; mtime?: Date }[] = [];
+    const manifest: any[] = [];
+
+    for (const id of receiptIds) {
+      const meta = receipts.find(r => r.id === id);
+      const rec = await getReceiptBlob(meta?.imageKey || id);
+      if (!rec?.blob) continue;
+
+      const ab = await rec.blob.arrayBuffer();
+      const data = new Uint8Array(ab);
+      const mime = meta?.mimeType || rec.mimeType || rec.blob.type || 'image/jpeg';
+      const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+      const filename = `receipts/${id}.${ext}`;
+      files.push({ name: filename, data, mtime: meta?.date ? new Date(meta.date) : new Date() });
+      manifest.push({ id, date: meta?.date, note: meta?.note, filename, mimeType: mime });
+    }
+
+    // Add manifest.json for easy mapping
+    files.unshift({ name: 'manifest.json', data: utf8(JSON.stringify({ taxYear: taxPrepYear, generatedAt: new Date().toISOString(), receipts: manifest }, null, 2)) });
+
+    const zipBlob = createZipBlobUncompressed(files);
+    downloadBlob(zipBlob, `MONIEZI_Receipts_${taxPrepYear}.zip`);
+    showToast(`Exported ${files.length - 1} receipt(s) ZIP for ${taxPrepYear}`, 'success');
+  };
+
+  const handleExportTaxSummaryPDF = async () => {
+    const income = txForTaxYear.filter(t => t.type === 'income').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const expenses = txForTaxYear.filter(t => t.type === 'expense').reduce((s, t) => s + Number(t.amount || 0), 0);
+    const net = income - expenses;
+    const rateCents = Number(settings.mileageRateCents ?? 72.5);
+    const miles = mileageForTaxYear.reduce((s, t) => s + Number(t.miles || 0), 0);
+    const mileageDeduction = miles * (rateCents / 100);
+
+    const wrapper = document.createElement('div');
+    wrapper.style.position = 'fixed';
+    wrapper.style.left = '-9999px';
+    wrapper.style.top = '0';
+    wrapper.innerHTML = `
+      <div style="font-family: Arial, sans-serif; padding: 24px;">
+        <h2 style="margin:0 0 8px 0;">MONIEZI — Tax Summary (${taxPrepYear})</h2>
+        <div style="margin-bottom: 16px; color:#444;">Business: ${settings.businessName || '—'} | Owner: ${settings.ownerName || '—'}</div>
+        <table style="width:100%; border-collapse: collapse;">
+          <tr><td style="padding:8px; border:1px solid #ddd;">Total Income</td><td style="padding:8px; border:1px solid #ddd; text-align:right;">${settings.currencySymbol}${income.toFixed(2)}</td></tr>
+          <tr><td style="padding:8px; border:1px solid #ddd;">Total Expenses</td><td style="padding:8px; border:1px solid #ddd; text-align:right;">${settings.currencySymbol}${expenses.toFixed(2)}</td></tr>
+          <tr><td style="padding:8px; border:1px solid #ddd; font-weight:bold;">Net Profit</td><td style="padding:8px; border:1px solid #ddd; text-align:right; font-weight:bold;">${settings.currencySymbol}${net.toFixed(2)}</td></tr>
+          <tr><td style="padding:8px; border:1px solid #ddd;">Mileage Miles</td><td style="padding:8px; border:1px solid #ddd; text-align:right;">${miles.toFixed(1)}</td></tr>
+          <tr><td style="padding:8px; border:1px solid #ddd;">Mileage Deduction</td><td style="padding:8px; border:1px solid #ddd; text-align:right;">${settings.currencySymbol}${mileageDeduction.toFixed(2)} (at ${(rateCents/100).toFixed(3)}/mi)</td></tr>
+        </table>
+        <div style="margin-top: 16px; font-size: 12px; color:#666;">
+          Generated ${new Date().toLocaleString()} — For planning only. Review with your tax professional.
+        </div>
+      </div>
+    `;
+    document.body.appendChild(wrapper);
+    try {
+      await (html2pdf() as any).from(wrapper).set({ filename: `MONIEZI_TaxSummary_${taxPrepYear}.pdf`, margin: 10, image: { type: 'jpeg', quality: 0.95 }, html2canvas: { scale: 2 } }).save();
+      showToast(`Exported Tax Summary PDF for ${taxPrepYear}`, 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('Failed to export Tax Summary PDF.', 'error');
+    } finally {
+      document.body.removeChild(wrapper);
+    }
+  };
+
 
   // Share PDF for Profit & Loss (uses Web Share API when available; falls back to download)
   const sharePLPDF = async () => {
@@ -3940,6 +4227,12 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
               setReceiptPreviewUrls(prev => ({ ...prev, [id]: url }));
 
               setScanPreview(null);
+              // If an expense is being edited/added, auto-link the new receipt
+              if (isDrawerOpen && (drawerMode === 'add' || drawerMode === 'edit_tx') && activeTab === 'expense') {
+                  setActiveItem(prev => ({ ...prev, receiptId: id }));
+              }
+
+              setScanPreview(null);
               setScanPreviewBlob(null);
               showToast("Receipt saved", "success");
           } catch (e) {
@@ -3989,7 +4282,7 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
       const backup = {
         metadata: {
           appName: "MONIEZI",
-          version: "0.1.0-core",
+          version: "10.2.0-taxprep",
           schemaVersion: 1,
           timestamp: new Date().toISOString(),
         },
@@ -5178,8 +5471,6 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                    </div>
                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Scan</span>
                 </button>
-                <input type="file" ref={scanInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleScanReceipt} />
-                
                 {receipts.map(r => (
                    <div key={r.id} onClick={() => setViewingReceipt(r)} className="flex-shrink-0 w-24 h-24 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden relative cursor-pointer shadow-sm group active:scale-95 transition-transform snap-start">
                       <img src={receiptPreviewUrls[r.id] || ''} className="w-full h-full object-cover" />
@@ -6097,7 +6388,156 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
 
                 {/* --- Tax Planner (2026) Accordion --- */}
               </div>
-                <div className="bg-white dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-slate-800 shadow-lg rounded-3xl p-6 relative overflow-hidden">
+                
+
+                {/* Tax Prep Package (Exports) */}
+                <div className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="p-2.5 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
+                        <Download size={20} strokeWidth={2} />
+                      </div>
+                      <div>
+                        <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">Tax Prep Package</h3>
+                        <p className="text-sm text-slate-600 dark:text-slate-300">Export ledger, mileage, receipts, and a summary for a single tax year.</p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400">Tax Year</span>
+                      <select value={taxPrepYear} onChange={e => setTaxPrepYear(Number(e.target.value))} className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-extrabold">
+                        {Array.from({ length: 6 }).map((_, i) => {
+                          const y = new Date().getFullYear() - i;
+                          return <option key={y} value={y}>{y}</option>;
+                        })}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <button onClick={handleExportTaxLedgerCSV} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Tax Ledger CSV</button>
+                    <button onClick={handleExportMileageCSV} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Mileage CSV</button>
+                    <button onClick={handleExportReceiptsZip} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Linked Receipts ZIP</button>
+                    <button onClick={handleExportTaxSummaryPDF} className="px-4 py-3 rounded-lg bg-blue-600 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-blue-700 active:scale-95 transition-all">Export Tax Summary PDF</button>
+                  </div>
+
+                  <div className="mt-6 bg-slate-50 dark:bg-slate-900/40 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+                    <div className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-3">Audit Readiness (Quick Checks)</div>
+                    {(() => {
+                      const requireReceipt = (settings.requireReceiptOverThreshold ?? true);
+                      const threshold = Number(settings.receiptThreshold ?? 0);
+                      const missing = txForTaxYear.filter(t => t.type === 'expense' && requireReceipt && Number(t.amount || 0) >= threshold && !(t as any).receiptId).length;
+                      const missingCategory = txForTaxYear.filter(t => !t.category?.trim()).length;
+                      const badMileage = mileageForTaxYear.filter(m => !m.purpose?.trim() || Number(m.miles || 0) <= 0).length;
+                      const linkedReceipts = txForTaxYear.filter(t => t.type === 'expense' && (t as any).receiptId).length;
+                      const totalExpenses = txForTaxYear.filter(t => t.type === 'expense').length;
+
+                      const Row = ({ ok, label, detail }: any) => (
+                        <div className="flex items-start justify-between gap-3 py-2 border-b last:border-b-0 border-slate-200/60 dark:border-slate-800/60">
+                          <div className="flex items-start gap-2">
+                            {ok ? <CheckCircle size={16} className="text-emerald-600 mt-0.5" /> : <AlertTriangle size={16} className="text-amber-600 mt-0.5" />}
+                            <div>
+                              <div className="text-sm font-extrabold text-slate-900 dark:text-white">{label}</div>
+                              {detail ? <div className="text-xs text-slate-600 dark:text-slate-300">{detail}</div> : null}
+                            </div>
+                          </div>
+                        </div>
+                      );
+
+                      return (
+                        <div className="space-y-0">
+                          <Row ok={missing === 0} label="Receipts linked (for required expenses)" detail={missing === 0 ? `Linked: ${linkedReceipts}/${totalExpenses} expense(s)` : `Missing receipts: ${missing}`} />
+                          <Row ok={missingCategory === 0} label="Categories assigned" detail={missingCategory === 0 ? 'OK' : `Missing category: ${missingCategory}`} />
+                          <Row ok={badMileage === 0} label="Mileage entries complete" detail={badMileage === 0 ? `Trips: ${mileageForTaxYear.length}` : `Incomplete trips: ${badMileage}`} />
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+
+                {/* Mileage Tracker */}
+                <div className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl">
+                  <div className="flex items-center gap-3 mb-6">
+                    <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
+                      <Truck size={20} strokeWidth={2} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg sm:text-xl font-extrabold text-slate-900 dark:text-white">Mileage</h3>
+                      <p className="text-sm text-slate-600 dark:text-slate-300">Track business miles and export for tax prep.</p>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                    <div className="md:col-span-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block">Date</label>
+                      <input type="date" value={newTrip.date} onChange={e => setNewTrip((p: any) => ({ ...p, date: e.target.value }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-bold" />
+                    </div>
+                    <div className="md:col-span-1">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block">Miles</label>
+                      <input type="number" value={newTrip.miles} onChange={e => setNewTrip((p: any) => ({ ...p, miles: e.target.value }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-bold" />
+                    </div>
+                    <div className="md:col-span-3">
+                      <label className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block">Purpose</label>
+                      <input type="text" value={newTrip.purpose} onChange={e => setNewTrip((p: any) => ({ ...p, purpose: e.target.value }))} placeholder="Client meeting, supply run, airport, etc." className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-bold" />
+                    </div>
+                    <div className="md:col-span-5 flex items-center justify-between gap-3">
+                      <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block">Client (optional)</label>
+                          <input type="text" value={newTrip.client} onChange={e => setNewTrip((p: any) => ({ ...p, client: e.target.value }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-bold" />
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 mb-2 block">Notes (optional)</label>
+                          <input type="text" value={newTrip.notes} onChange={e => setNewTrip((p: any) => ({ ...p, notes: e.target.value }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-3 py-2 text-sm font-bold" />
+                        </div>
+                      </div>
+                      <button onClick={() => addMileageTrip({ date: newTrip.date, miles: Number(newTrip.miles), purpose: newTrip.purpose, client: newTrip.client || undefined, notes: newTrip.notes || undefined })} className="px-5 py-3 rounded-lg bg-emerald-600 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-emerald-700 active:scale-95 transition-all whitespace-nowrap">Add Trip</button>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs font-bold uppercase tracking-widest text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                          <th className="py-2 pr-4">Date</th>
+                          <th className="py-2 pr-4">Miles</th>
+                          <th className="py-2 pr-4">Purpose</th>
+                          <th className="py-2 pr-4">Client</th>
+                          <th className="py-2 pr-4">Notes</th>
+                          <th className="py-2 pr-4 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {mileageForTaxYear.length === 0 ? (
+                          <tr><td colSpan={6} className="py-4 text-slate-500 dark:text-slate-400">No mileage trips for {taxPrepYear}.</td></tr>
+                        ) : mileageForTaxYear.slice().sort((a,b) => b.date.localeCompare(a.date)).map(trip => (
+                          <tr key={trip.id} className="border-b border-slate-200/60 dark:border-slate-800/60">
+                            <td className="py-2 pr-4">
+                              <input type="date" value={trip.date} onChange={e => updateMileageTrip(trip.id, { date: e.target.value })} className="bg-transparent border border-slate-200 dark:border-slate-800 rounded-md px-2 py-1 text-sm font-bold" />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input type="number" value={trip.miles} onChange={e => updateMileageTrip(trip.id, { miles: Number(e.target.value) })} className="w-24 bg-transparent border border-slate-200 dark:border-slate-800 rounded-md px-2 py-1 text-sm font-bold" />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input type="text" value={trip.purpose} onChange={e => updateMileageTrip(trip.id, { purpose: e.target.value })} className="w-64 bg-transparent border border-slate-200 dark:border-slate-800 rounded-md px-2 py-1 text-sm font-bold" />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input type="text" value={trip.client || ''} onChange={e => updateMileageTrip(trip.id, { client: e.target.value })} className="w-40 bg-transparent border border-slate-200 dark:border-slate-800 rounded-md px-2 py-1 text-sm font-bold" />
+                            </td>
+                            <td className="py-2 pr-4">
+                              <input type="text" value={trip.notes || ''} onChange={e => updateMileageTrip(trip.id, { notes: e.target.value })} className="w-48 bg-transparent border border-slate-200 dark:border-slate-800 rounded-md px-2 py-1 text-sm font-bold" />
+                            </td>
+                            <td className="py-2 pr-4 text-right">
+                              <button onClick={() => deleteMileageTrip(trip.id)} className="px-3 py-2 rounded-lg bg-red-600 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-red-700 active:scale-95 transition-all">Delete</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+<div className="bg-white dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-slate-800 shadow-lg rounded-3xl p-6 relative overflow-hidden">
                   <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-blue-500/10 dark:bg-blue-400/10 opacity-0 dark:opacity-100 blur-2xl pointer-events-none" />
                   <button
                     onClick={() => setIsPlannerOpen(!isPlannerOpen)}
@@ -7694,7 +8134,37 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                        <div className="flex justify-between items-center"><span className="text-emerald-700 dark:text-emerald-300">State Tax (Optional)</span><span className="font-bold text-emerald-900 dark:text-emerald-100 text-lg">{settings.stateTaxRate}%</span></div>
                        <div className="flex justify-between items-center"><span className="text-emerald-700 dark:text-emerald-300 flex items-center gap-1">Self-Employment Tax <HelpCircle size={14} className="cursor-help" title="Social Security (12.4%) + Medicare (2.9%)" /></span><span className="font-bold text-emerald-900 dark:text-emerald-100 text-lg">~15.3%</span></div>
                        <div className="h-px bg-emerald-200 dark:bg-emerald-800 my-1" />
-                       <div className="flex justify-between items-center bg-emerald-100 dark:bg-emerald-900/20 -mx-2 px-2 py-2 rounded"><span className="font-bold uppercase text-xs tracking-wider text-emerald-900 dark:text-emerald-100">Combined Planning Rate</span><span className="font-extrabold text-2xl text-emerald-900 dark:text-emerald-100">{(settings.taxRate + settings.stateTaxRate + 15.3).toFixed(1)}%</span></div>
+                       <div className="flex justify-between items-center bg-emerald-100 dark:bg-emerald-900/20 -mx-2 px-2 py-2 rounded"><span className="font-bold uppercase text-xs tracking-wider text-emerald-900 dark:text-emerald-100">Combined Planning Rate</span>
+                    </div>
+
+                    {/* Tax Prep / Audit Readiness Settings */}
+                    <div className="mt-6 bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+                      <div className="text-xs font-bold uppercase tracking-widest text-slate-600 dark:text-slate-300 mb-4">Tax Prep / Audit Readiness</div>
+                      <div className="flex items-center justify-between gap-3 py-2">
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900 dark:text-white">Require receipts for expenses</div>
+                          <div className="text-xs text-slate-600 dark:text-slate-300">When enabled, expenses at/above the threshold cannot be saved without a linked receipt.</div>
+                        </div>
+                        <button type="button" onClick={() => setSettings(s => ({ ...s, requireReceiptOverThreshold: !(s.requireReceiptOverThreshold ?? true) }))} className={`px-4 py-2 rounded-lg font-extrabold uppercase tracking-widest text-xs ${ (settings.requireReceiptOverThreshold ?? true) ? 'bg-emerald-600 text-white' : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200'}`}>
+                          {(settings.requireReceiptOverThreshold ?? true) ? 'ON' : 'OFF'}
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+                        <div>
+                          <label className="text-xs font-bold uppercase tracking-widest text-slate-600 dark:text-slate-300 mb-2 block">Receipt Threshold ($)</label>
+                          <input type="number" value={Number(settings.receiptThreshold ?? 0)} onChange={e => setSettings(s => ({ ...s, receiptThreshold: Number(e.target.value) }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-4 py-3 font-extrabold text-sm" />
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">Set to 0 to require a receipt for every expense.</div>
+                        </div>
+                        <div>
+                          <label className="text-xs font-bold uppercase tracking-widest text-slate-600 dark:text-slate-300 mb-2 block">Mileage Rate (cents per mile)</label>
+                          <input type="number" step="0.1" value={Number(settings.mileageRateCents ?? 72.5)} onChange={e => setSettings(s => ({ ...s, mileageRateCents: Number(e.target.value) }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg px-4 py-3 font-extrabold text-sm" />
+                          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">Default set to 72.5¢/mile (edit as needed).</div>
+                        </div>
+                      </div>
+                    </div>
+
+<span className="font-extrabold text-2xl text-emerald-900 dark:text-emerald-100">{(settings.taxRate + settings.stateTaxRate + 15.3).toFixed(1)}%</span></div>
                     </div>
                  </div>
                 </div>
@@ -8214,12 +8684,37 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       <div><label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Description</label><input type="text" value={activeItem.name || ''} onChange={e => setActiveItem(prev => ({ ...prev, name: e.target.value }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-4 font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500/20" placeholder={activeTab === 'income' ? "Client or Source" : "Vendor or Purchase"} /></div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><DateInput label="Date" value={activeItem.date || ''} onChange={v => setActiveItem(prev => ({ ...prev, date: v }))} /><div><label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Amount</label><div className="relative"><span className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-600 dark:text-slate-300 font-bold">{settings.currencySymbol}</span><input type="number" value={activeItem.amount || ''} onChange={e => setActiveItem(prev => ({ ...prev, amount: Number(e.target.value) }))} className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg pl-10 pr-4 py-4 font-bold text-lg outline-none focus:ring-2 focus:ring-blue-500/20" placeholder="0.00" /></div></div></div>
                       <div><label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Category</label>{renderCategoryChips(activeItem.category, (cat) => setActiveItem(prev => ({ ...prev, category: cat })))}</div>
+                      {activeTab === 'expense' && (
+                        <div className="space-y-2">
+                          <label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Receipt</label>
+                          <div className="flex gap-2">
+                            <select value={(activeItem as any).receiptId || ''} onChange={e => setActiveItem(prev => ({ ...prev, receiptId: e.target.value || undefined }))} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-3 font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                              <option value="">No receipt linked</option>
+                              {receipts.map(r => (
+                                <option key={r.id} value={r.id}>{`${r.date}${r.note ? ' — ' + r.note : ''} (${r.id.slice(-6)})`}</option>
+                              ))}
+                            </select>
+                            <button type="button" onClick={() => scanInputRef.current?.click()} className="px-4 py-3 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-extrabold text-sm uppercase tracking-wider hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 transition-all">Scan</button>
+                          </div>
+                          {(settings.requireReceiptOverThreshold ?? true) && Number((activeItem as any).amount || 0) >= Number(settings.receiptThreshold ?? 0) && !(activeItem as any).receiptId && (
+                            <div className="flex items-start gap-2 text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                              <AlertTriangle size={16} className="mt-0.5" />
+                              <div>Receipt required to save this expense. Link an existing receipt or scan a new one.</div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <button onClick={() => saveTransaction(activeItem)} className={`w-full py-4 font-bold rounded-lg shadow-lg uppercase tracking-widest transition-all active:scale-95 text-white ${activeTab === 'income' ? 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-500/20' : 'bg-red-600 hover:bg-red-700 shadow-red-500/20'}`}>Save {activeTab}</button>
                    </div>
                 )}
              </div>
          )}
       </Drawer>
+
+      {/* GLOBAL RECEIPT SCAN INPUT */}
+      <input type="file" ref={scanInputRef} className="hidden" accept="image/*" capture="environment" onChange={handleScanReceipt} />
+
       
       
 
