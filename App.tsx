@@ -85,7 +85,8 @@ import { Page, Transaction, Invoice, Estimate, Client, ClientStatus, UserSetting
 import { CATS_IN, CATS_OUT, CATS_BILLING, DEFAULT_PAY_PREFS, DB_KEY, TAX_CONSTANTS, TAX_PLANNER_2026, getFreshDemoData } from './constants';
 import InsightsDashboard from './InsightsDashboard';
 import { getInsightCount } from './services/insightsEngine';
-import { putReceiptBlob, getReceiptBlob, deleteReceiptBlob, dataUrlToBlob, blobToDataUrl } from './services/receiptStore';
+import { putReceiptBlob, getReceiptBlob, deleteReceiptBlob, dataUrlToBlob, blobToDataUrl, clearAllReceipts } from './services/receiptStore';
+import { loadAppState, saveAppState, clearAppState } from './services/appStore';
 // --- Utility: UUID Generator ---
 const generateId = (prefix: string) => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -945,6 +946,7 @@ export default function App() {
   const [showRestoreModal, setShowRestoreModal] = useState(false);
   const [pendingBackupData, setPendingBackupData] = useState<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const appStateSaveTimerRef = useRef<number | null>(null);
 
   // Scan Receipt State
   const [scanPreview, setScanPreview] = useState<string | null>(null);
@@ -1441,8 +1443,6 @@ export default function App() {
     let cancelled = false;
 
     const load = async () => {
-      const saved = localStorage.getItem(DB_KEY);
-
       const applyDefaults = (parsedSettings: any) => {
         const defaultMethod: TaxEstimationMethod = parsedSettings?.taxEstimationMethod || 'custom';
         setSettings({
@@ -1464,9 +1464,34 @@ export default function App() {
         });
       };
 
-      if (saved) {
+      let parsed: any = null;
+      let source: 'idb' | 'localStorage' | null = null;
+
+      // 1) Prefer IndexedDB app-state (large-capacity, mobile-friendly)
+      try {
+        parsed = await loadAppState();
+        if (parsed) source = 'idb';
+      } catch (e) {
+        console.error("IndexedDB load failed, falling back to localStorage", e);
+      }
+
+      // 2) Fallback: legacy localStorage payload (older versions)
+      if (!parsed) {
+        const saved = localStorage.getItem(DB_KEY);
+        if (saved) {
+          try {
+            parsed = JSON.parse(saved);
+            source = 'localStorage';
+          } catch (e) {
+            console.error("Error parsing legacy localStorage payload", e);
+            parsed = null;
+            source = null;
+          }
+        }
+      }
+
+      if (parsed) {
         try {
-          const parsed = JSON.parse(saved);
           setTransactions(parsed.transactions || []);
           setInvoices(parsed.invoices || []);
           setEstimates(parsed.estimates || []);
@@ -1480,7 +1505,12 @@ export default function App() {
           });
 
           setTaxPayments(parsed.taxPayments || []);
+          if (!cancelled) setMileageTrips(parsed.mileageTrips || []);
+          if (!cancelled) setSavedTemplates(Array.isArray(parsed.savedTemplates) ? parsed.savedTemplates : []);
+          if (!cancelled) setDuplicationHistory(parsed.duplicationHistory || {});
+          if (!cancelled && parsed.plannerData) setPlannerData(parsed.plannerData);
 
+          // Receipts: migrate any embedded imageData -> IndexedDB receipt blobs, store metadata only in app-state
           const loadedReceipts: any[] = Array.isArray(parsed.receipts) ? parsed.receipts : [];
           const migrated: ReceiptType[] = [];
           let migratedAny = false;
@@ -1506,15 +1536,32 @@ export default function App() {
 
           if (!cancelled) setReceipts(migrated);
 
-          if (!cancelled) setMileageTrips(parsed.mileageTrips || []);
-
-          if (migratedAny) {
+          // If we loaded from localStorage OR we had any legacy receipt imageData, migrate to IndexedDB app-state
+          if (source === 'localStorage' || migratedAny) {
             try {
               const receiptsMeta = migrated.map(r => ({ id: r.id, date: r.date, imageKey: r.imageKey, mimeType: r.mimeType, note: r.note }));
-              localStorage.setItem(DB_KEY, JSON.stringify({ ...parsed, receipts: receiptsMeta }));
-              showToast("Upgraded receipts storage for reliability.", "success");
+              const cleaned = {
+                transactions: parsed.transactions || [],
+                invoices: parsed.invoices || [],
+                estimates: parsed.estimates || [],
+                clients: parsed.clients || [],
+                settings: parsed.settings || {},
+                taxPayments: parsed.taxPayments || [],
+                customCategories: parsed.customCategories || { income: [], expense: [], billing: [] },
+                receipts: receiptsMeta,
+                mileageTrips: parsed.mileageTrips || [],
+                savedTemplates: Array.isArray(parsed.savedTemplates) ? parsed.savedTemplates : [],
+                duplicationHistory: parsed.duplicationHistory || {},
+                plannerData: parsed.plannerData,
+              };
+              await saveAppState(cleaned);
+
+              // Keep the legacy key only as a migration source; remove to avoid quota issues.
+              try { localStorage.removeItem(DB_KEY); } catch { /* ignore */ }
+
+              showToast("Upgraded storage to IndexedDB for better capacity & reliability.", "success");
             } catch (e) {
-              console.error(e);
+              console.error("Failed to migrate app-state to IndexedDB", e);
             }
           }
         } catch (e) {
@@ -1533,7 +1580,8 @@ export default function App() {
         setReceipts([]);
         applyDefaults(null);
         setMileageTrips([]);
-        applyDefaults(null);
+        setSavedTemplates([]);
+        setDuplicationHistory({});
       }
 
       if (!cancelled) setDataLoaded(true);
@@ -1547,16 +1595,46 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (dataLoaded) {
-      try {
-        const receiptsMeta = receipts.map(r => ({ id: r.id, date: r.date, imageKey: r.imageKey, mimeType: r.mimeType, note: r.note }));
-        localStorage.setItem(DB_KEY, JSON.stringify({ transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts: receiptsMeta, mileageTrips }));
-      } catch (e) {
-        console.error("Save failed (storage quota?)", e);
-        showToast("Warning: Could not save data (storage limit). Export a backup now.", "warning");
-      }
+    if (!dataLoaded) return;
+
+    // Debounced IndexedDB write to avoid excessive transactions while typing.
+    if (appStateSaveTimerRef.current) {
+      window.clearTimeout(appStateSaveTimerRef.current);
     }
-  }, [transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts, dataLoaded]);
+
+    const receiptsMeta = receipts.map(r => ({ id: r.id, date: r.date, imageKey: r.imageKey, mimeType: r.mimeType, note: r.note }));
+    const payload = {
+      transactions,
+      invoices,
+      estimates,
+      clients,
+      settings,
+      taxPayments,
+      customCategories,
+      receipts: receiptsMeta,
+      mileageTrips,
+      savedTemplates,
+      duplicationHistory,
+      plannerData,
+    };
+
+    appStateSaveTimerRef.current = window.setTimeout(() => {
+      (async () => {
+        try {
+          await saveAppState(payload);
+        } catch (e) {
+          console.error("Save failed (IndexedDB?)", e);
+          showToast("Warning: Could not save data (storage). Export a backup now.", "warning");
+        }
+      })();
+    }, 350);
+
+    return () => {
+      if (appStateSaveTimerRef.current) {
+        window.clearTimeout(appStateSaveTimerRef.current);
+      }
+    };
+  }, [transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts, mileageTrips, savedTemplates, duplicationHistory, plannerData, dataLoaded]);
 
   useEffect(() => {
     if (!dataLoaded) return;
@@ -2854,13 +2932,49 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
   const handleClearData = () => setShowResetConfirm(true);
   
   const performReset = () => {
-    try {
-        localStorage.setItem(DB_KEY, JSON.stringify({ transactions: [], invoices: [], estimates: [], clients: [], settings: { businessName: "My Business", ownerName: "Owner", payPrefs: DEFAULT_PAY_PREFS, taxRate: 25, currencySymbol: '$' }, taxPayments: [], customCategories: { income: [], expense: [], billing: [] }, receipts: [] }));
-    } catch (e) { console.error("Failed to wipe", e); }
-    setTransactions([]); setInvoices([]); setEstimates([]); setTaxPayments([]); setReceipts([]); setCustomCategories({ income: [], expense: [], billing: [] }); setSettings({ businessName: "My Business", ownerName: "Owner", payPrefs: DEFAULT_PAY_PREFS, taxRate: 25, stateTaxRate: 0, taxEstimationMethod: 'preset', filingStatus: 'single', currencySymbol: '$' });
-     setSeedSuccess(false); setShowResetConfirm(false); showToast("All data has been wiped.", "success"); setCurrentPage(Page.Dashboard);
-  };
+    // Clear legacy localStorage payload (if present)
+    try { localStorage.removeItem(DB_KEY); } catch { /* ignore */ }
 
+    // Clear IndexedDB app-state (large-capacity storage)
+    clearAppState().catch((e) => console.error("Failed to clear IndexedDB app-state", e));
+
+    // Clear receipt blobs as well to free space
+    clearAllReceipts().catch((e) => console.error("Failed to clear receipt blobs", e));
+
+    // Reset in-memory state
+    setTransactions([]);
+    setInvoices([]);
+    setEstimates([]);
+    setClients([]);
+    setTaxPayments([]);
+    setReceipts([]);
+    setMileageTrips([]);
+    setSavedTemplates([]);
+    setDuplicationHistory({});
+    setCustomCategories({ income: [], expense: [], billing: [] });
+
+    setSettings({
+      businessName: "My Business",
+      ownerName: "Owner",
+      payPrefs: DEFAULT_PAY_PREFS,
+      taxRate: 22,
+      stateTaxRate: 0,
+      taxEstimationMethod: 'custom',
+      filingStatus: 'single',
+      currencySymbol: '$',
+      showLogoOnInvoice: true,
+      logoAlignment: 'left',
+      brandColor: '#2563eb',
+      requireReceiptOverThreshold: true,
+      receiptThreshold: 0,
+      mileageRateCents: 72.5,
+    });
+
+    setSeedSuccess(false);
+    setShowResetConfirm(false);
+    showToast("All data has been wiped.", "success");
+    setCurrentPage(Page.Dashboard);
+  };
   const confirmDeleteInvoice = () => {
     if (!invoiceToDelete) return;
     const inv = invoices.find(i => i.id === invoiceToDelete);
@@ -4295,6 +4409,10 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
           taxPayments,
           customCategories,
           receipts: receiptsForBackup,
+          mileageTrips,
+          savedTemplates,
+          duplicationHistory,
+          plannerData,
         },
       };
 
@@ -4363,6 +4481,11 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
         billing: Array.isArray(newData.customCategories?.billing) ? newData.customCategories.billing : [],
       };
 
+      const trips = Array.isArray(newData.mileageTrips) ? newData.mileageTrips : [];
+      const templates = Array.isArray(newData.savedTemplates) ? newData.savedTemplates : [];
+      const dupeHist = newData.duplicationHistory || {};
+      const planner = newData.plannerData || null;
+
       // 2. Restore receipts into IndexedDB (backup carries imageData DataURLs)
       const restoredReceipts: ReceiptType[] = [];
       for (const r of rec) {
@@ -4393,6 +4516,11 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
       setReceipts(restoredReceipts);
       setSettings(set);
       setCustomCategories(cats);
+
+      setMileageTrips(trips);
+      setSavedTemplates(templates);
+      setDuplicationHistory(dupeHist);
+      if (planner) setPlannerData(planner);
 
       // 4. UI Feedback & Cleanup
       setShowRestoreModal(false);
