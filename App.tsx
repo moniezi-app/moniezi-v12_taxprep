@@ -2496,7 +2496,7 @@ export default function App() {
     if(confirm("Delete this tax payment?")) { setTaxPayments(prev => prev.filter(p => p.id !== id)); showToast("Payment deleted", "info"); }
   };
 
-  const handleSeedDemoData = () => {
+  const handleSeedDemoData = async () => {
     const demo = getFreshDemoData();
     // --- Demo Clients + Estimates (V7) ---
     const toISO = (d: Date) => d.toISOString().split('T')[0];
@@ -2868,7 +2868,83 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
     ];
 
     // Keep original demo data, but add our V7 demo entities
-    setTransactions([...demo.transactions] as Transaction[]);
+    
+    // --- Demo receipts + mileage + audit readiness examples ---
+    const currentYear = new Date().getFullYear();
+    const taxYearStr = String(currentYear);
+    const DEMO_RECEIPT_THRESHOLD = 100;
+
+    // Create a small set of demo receipts. These appear in the receipt dropdown,
+    // and we store tiny placeholder blobs in IndexedDB so preview/download works.
+    const demoReceiptDataUrl =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PnYXWQAAAABJRU5ErkJggg==";
+
+    const demoReceipts: Receipt[] = Array.from({ length: 8 }).map((_, i) => {
+      const id = `rcpt_demo_${i + 1}`;
+      return {
+        id,
+        date: toISO(daysAgo(10 + i)),
+        imageKey: `demo_${id}`,
+        mimeType: "image/png",
+        note: `Demo receipt ${i + 1}`,
+      };
+    });
+
+    // Ensure receipts are available in the dropdown.
+    setReceipts(demoReceipts);
+
+    // Attach receiptIds to existing current-year expenses so the audit check can show a controlled missing count.
+    const baseTx = ([...demo.transactions] as any[]).map(t => ({ ...t }));
+    const currentYearExpenses = baseTx.filter(
+      t => t.type === "expense" && String(t.date || "").startsWith(taxYearStr)
+    );
+    currentYearExpenses.forEach((t, idx) => {
+      t.receiptId = demoReceipts[idx % demoReceipts.length].id;
+      if (Number(t.amount || 0) < DEMO_RECEIPT_THRESHOLD) {
+        t.amount = DEMO_RECEIPT_THRESHOLD + ((idx % 5) * 7);
+      }
+    });
+
+    // Add 38 missing-receipt examples in the current tax year (so users see "Missing receipts: 38" in Tax Prep).
+    const missingCount = 38;
+    const missingReceiptTx: any[] = Array.from({ length: missingCount }).map((_, i) => {
+      const day = (i % 28) + 1;
+      const date = `${taxYearStr}-01-${String(day).padStart(2, "0")}`;
+      const cat = i % 3 === 0 ? "Travel" : i % 3 === 1 ? "Meals (Business)" : "Office Supplies";
+      return {
+        id: `tx_demo_missing_rcpt_${i + 1}`,
+        name: `Demo expense (receipt missing) #${i + 1}`,
+        amount: DEMO_RECEIPT_THRESHOLD + (i % 9) * 13,
+        category: cat,
+        date,
+        type: "expense" as const,
+        notes: "Demo: receipt not linked yet",
+      };
+    });
+
+    // Seed mileage trips so new users can try Mileage + exports immediately.
+    const demoMileageTrips: MileageTrip[] = [
+      { id: "mi_demo_1", date: `${taxYearStr}-01-06`, miles: 12.4, purpose: "Client meeting", client: "Chen Tech Solutions", notes: "Downtown consult" },
+      { id: "mi_demo_2", date: `${taxYearStr}-01-12`, miles: 28.1, purpose: "Equipment pickup", client: "", notes: "Office supplies run" },
+      { id: "mi_demo_3", date: `${taxYearStr}-01-18`, miles: 7.6, purpose: "Bank / post office", client: "", notes: "" },
+      { id: "mi_demo_4", date: `${taxYearStr}-01-23`, miles: 41.3, purpose: "Client site visit", client: "Wilson Renovations", notes: "Scope walk-through" },
+      { id: "mi_demo_5", date: `${taxYearStr}-02-03`, miles: 16.2, purpose: "Networking event", client: "", notes: "" },
+      { id: "mi_demo_6", date: `${taxYearStr}-02-10`, miles: 33.8, purpose: "Vendor meeting", client: "", notes: "Printer / signage" },
+      { id: "mi_demo_7", date: `${taxYearStr}-02-15`, miles: 9.9, purpose: "Client follow-up", client: "Blue Harbor Realty", notes: "" },
+      { id: "mi_demo_8", date: `${taxYearStr}-02-19`, miles: 22.0, purpose: "Business errands", client: "", notes: "" },
+    ];
+    setMileageTrips(demoMileageTrips);
+
+    // Save the tiny placeholder receipt blobs into the receipt DB so preview/download works.
+    try {
+      const { blob, mimeType } = await dataUrlToBlob(demoReceiptDataUrl);
+      await Promise.all(demoReceipts.map(r => putReceiptBlob(r.imageKey, blob, mimeType || "image/png")));
+    } catch (e) {
+      console.warn("Failed to seed demo receipt blobs", e);
+    }
+
+    setTransactions([...(baseTx as Transaction[]), ...(missingReceiptTx as Transaction[])]);
+
 
     // Fix demo invoices so line-item rates look realistic (avoid single huge rate == total).
     const demoInvoicesFixed = (demo.invoices || []).map((inv: any) => {
@@ -2924,7 +3000,7 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
       const t = calcDocTotals(e.items as any, e.discount || 0, e.taxRate || 0, e.shipping || 0);
       return { ...e, subtotal: t.subtotal, amount: t.total } as Estimate;
     }));
-    setSettings({ ...demo.settings });
+    setSettings({ ...demo.settings, requireReceiptOverThreshold: true, receiptThreshold: 100, mileageRate: 0.725 });
     setTaxPayments([...(demo.taxPayments || [])] as TaxPayment[]);
     setSeedSuccess(true); showToast("Demo data loaded successfully!", "success"); setCurrentPage(Page.Dashboard); setTimeout(() => setSeedSuccess(false), 2000);
   };
