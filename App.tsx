@@ -816,6 +816,7 @@ export default function App() {
   const [customCategories, setCustomCategories] = useState<CustomCategories>({ income: [], expense: [], billing: [] });
   const [taxPayments, setTaxPayments] = useState<TaxPayment[]>([]);
   const [receipts, setReceipts] = useState<ReceiptType[]>([]);
+  const [isDemoData, setIsDemoData] = useState<boolean>(false);
   const [mileageTrips, setMileageTrips] = useState<MileageTrip[]>([]);
   // Receipt image URLs (runtime-only). Stored images live in IndexedDB.
   const [receiptPreviewUrls, setReceiptPreviewUrls] = useState<Record<string, string>>({});
@@ -939,8 +940,37 @@ export default function App() {
   
   const [scrollToTaxSnapshot, setScrollToTaxSnapshot] = useState(false);
   const [taxPrepYear, setTaxPrepYear] = useState<number>(new Date().getFullYear());
+  const [auditMissingReceipts, setAuditMissingReceipts] = useState<number | null>(null);
+  const [auditMissingDelta, setAuditMissingDelta] = useState<number>(0);
+  const [auditMissingPulse, setAuditMissingPulse] = useState<boolean>(false);
   const [newTrip, setNewTrip] = useState<any>({ date: new Date().toISOString().split('T')[0], miles: '', purpose: '', client: '', notes: '' });
   const taxSnapshotRef = useRef<HTMLDivElement>(null);
+
+  // Keep Tax Prep audit counters reactive (so demo shows a visible before/after change)
+  useEffect(() => {
+    if (!dataLoaded) return;
+    const year = taxPrepYear;
+    const requireRcpt = settings.requireReceiptOverThreshold ?? true;
+    const threshold = Number(settings.receiptThreshold ?? 0);
+    if (!requireRcpt) {
+      setAuditMissingReceipts(0);
+      setAuditMissingDelta(0);
+      setAuditMissingPulse(false);
+      return;
+    }
+    const txForYear = transactions.filter(t => new Date(t.date).getFullYear() === year);
+    const missing = txForYear.filter(t => t.type === 'expense' && Number((t as any).amount || 0) >= threshold && !(t as any).receiptId).length;
+    setAuditMissingReceipts(prev => {
+      if (prev === null) return missing;
+      if (prev !== missing) {
+        const delta = missing - prev;
+        setAuditMissingDelta(delta);
+        setAuditMissingPulse(true);
+        window.setTimeout(() => setAuditMissingPulse(false), 1200);
+      }
+      return missing;
+    });
+  }, [transactions, settings.requireReceiptOverThreshold, settings.receiptThreshold, taxPrepYear, dataLoaded]);
 
   // Backup & Restore State
   const [showRestoreModal, setShowRestoreModal] = useState(false);
@@ -1509,6 +1539,7 @@ export default function App() {
           if (!cancelled) setSavedTemplates(Array.isArray(parsed.savedTemplates) ? parsed.savedTemplates : []);
           if (!cancelled) setDuplicationHistory(parsed.duplicationHistory || {});
           if (!cancelled && parsed.plannerData) setPlannerData(parsed.plannerData);
+          if (!cancelled) setIsDemoData(!!parsed.isDemoData);
 
           // Receipts: migrate any embedded imageData -> IndexedDB receipt blobs, store metadata only in app-state
           const loadedReceipts: any[] = Array.isArray(parsed.receipts) ? parsed.receipts : [];
@@ -1553,6 +1584,7 @@ export default function App() {
                 savedTemplates: Array.isArray(parsed.savedTemplates) ? parsed.savedTemplates : [],
                 duplicationHistory: parsed.duplicationHistory || {},
                 plannerData: parsed.plannerData,
+                isDemoData: !!parsed.isDemoData,
               };
               await saveAppState(cleaned);
 
@@ -1582,6 +1614,7 @@ export default function App() {
         setMileageTrips([]);
         setSavedTemplates([]);
         setDuplicationHistory({});
+        setIsDemoData(false);
       }
 
       if (!cancelled) setDataLoaded(true);
@@ -1616,6 +1649,7 @@ export default function App() {
       savedTemplates,
       duplicationHistory,
       plannerData,
+      isDemoData,
     };
 
     appStateSaveTimerRef.current = window.setTimeout(() => {
@@ -1634,7 +1668,7 @@ export default function App() {
         window.clearTimeout(appStateSaveTimerRef.current);
       }
     };
-  }, [transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts, mileageTrips, savedTemplates, duplicationHistory, plannerData, dataLoaded]);
+  }, [transactions, invoices, estimates, clients, settings, taxPayments, customCategories, receipts, mileageTrips, savedTemplates, duplicationHistory, plannerData, isDemoData, dataLoaded]);
 
   useEffect(() => {
     if (!dataLoaded) return;
@@ -2482,6 +2516,23 @@ export default function App() {
       setIsDrawerOpen(true);
   };
 
+  const runDemoReceiptWalkthrough = useCallback(() => {
+    const year = taxPrepYear;
+    const requireRcpt = settings.requireReceiptOverThreshold ?? true;
+    const threshold = Number(settings.receiptThreshold ?? 0);
+
+    // Choose an expense in the selected tax year that is missing a receipt (so the user sees the counter change).
+    const txForYear = transactions.filter(t => new Date(t.date).getFullYear() === year);
+    const missing = txForYear.filter(t => t.type === 'expense' && requireRcpt && Number((t as any).amount || 0) >= threshold && !(t as any).receiptId);
+    const target = missing[0] || txForYear.find(t => t.type === 'expense');
+
+    if (!target) return showToast("No expenses found for this tax year.", "info");
+
+    setCurrentPage(Page.Expenses);
+    handleEditItem(target);
+    showToast("Demo: attach a receipt using Scan or Select, then Save. Watch the missing-receipts number change.", "info");
+  }, [transactions, settings.requireReceiptOverThreshold, settings.receiptThreshold, taxPrepYear, handleEditItem]);
+
   const handleOpenTaxDrawer = () => {
     setDrawerMode('tax_payments'); setActiveTaxPayment({ type: 'Estimated', date: new Date().toISOString().split('T')[0], amount: 0, note: '' }); setIsDrawerOpen(true);
   };
@@ -2498,6 +2549,7 @@ export default function App() {
 
   const handleSeedDemoData = async () => {
     const demo = getFreshDemoData();
+    setIsDemoData(true);
     // --- Demo Clients + Estimates (V7) ---
     const toISO = (d: Date) => d.toISOString().split('T')[0];
     const today = new Date();
@@ -2874,24 +2926,42 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
     const taxYearStr = String(currentYear);
     const DEMO_RECEIPT_THRESHOLD = 100;
 
-    // Create a small set of demo receipts. These appear in the receipt dropdown,
-    // and we store tiny placeholder blobs in IndexedDB so preview/download works.
-    const demoReceiptDataUrl =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PnYXWQAAAABJRU5ErkJggg==";
+    // Create a small set of realistic demo receipts (stored in IndexedDB so preview/download works).
+    // These are static PNGs in /public/demo/receipts.
+    const demoReceiptAssets = [
+      { file: "/demo/receipts/grocery.png", note: "BIG MARKET — groceries" },
+      { file: "/demo/receipts/gas.png", note: "GAS STATION — fuel" },
+      { file: "/demo/receipts/office.png", note: "OFFICE DEPOT — supplies" },
+      { file: "/demo/receipts/restaurant.png", note: "COASTAL GRILL — meals" },
+      { file: "/demo/receipts/hardware.png", note: "HARDWARE STORE — materials" },
+    ];
 
-    const demoReceipts: Receipt[] = Array.from({ length: 8 }).map((_, i) => {
+    const demoReceipts: Receipt[] = Array.from({ length: 10 }).map((_, i) => {
+      const asset = demoReceiptAssets[i % demoReceiptAssets.length];
       const id = `rcpt_demo_${i + 1}`;
       return {
         id,
         date: toISO(daysAgo(10 + i)),
-        imageKey: `demo_${id}`,
+        imageKey: id,
         mimeType: "image/png",
-        note: `Demo receipt ${i + 1}`,
+        note: `${asset.note} (demo #${i + 1})`,
       };
     });
 
     // Ensure receipts are available in the dropdown.
     setReceipts(demoReceipts);
+
+    // Save demo receipt blobs into the receipt DB so thumbnails/preview/download work.
+    try {
+      for (let i = 0; i < demoReceipts.length; i++) {
+        const asset = demoReceiptAssets[i % demoReceiptAssets.length];
+        const resp = await fetch(asset.file);
+        const blob = await resp.blob();
+        await putReceiptBlob(demoReceipts[i].imageKey, blob, blob.type || "image/png");
+      }
+    } catch (e) {
+      console.warn("Failed to seed demo receipt blobs", e);
+    }
 
     // Attach receiptIds to existing current-year expenses so the audit check can show a controlled missing count.
     const baseTx = ([...demo.transactions] as any[]).map(t => ({ ...t }));
@@ -2935,15 +3005,7 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
     ];
     setMileageTrips(demoMileageTrips);
 
-    // Save the tiny placeholder receipt blobs into the receipt DB so preview/download works.
-    try {
-      const { blob, mimeType } = await dataUrlToBlob(demoReceiptDataUrl);
-      await Promise.all(demoReceipts.map(r => putReceiptBlob(r.imageKey, blob, mimeType || "image/png")));
-    } catch (e) {
-      console.warn("Failed to seed demo receipt blobs", e);
-    }
-
-    setTransactions([...(baseTx as Transaction[]), ...(missingReceiptTx as Transaction[])]);
+        setTransactions([...(baseTx as Transaction[]), ...(missingReceiptTx as Transaction[])]);
 
 
     // Fix demo invoices so line-item rates look realistic (avoid single huge rate == total).
@@ -6618,6 +6680,23 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
                   </div>
 
+                  {isDemoData ? (
+                    <div className="mb-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-4">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-extrabold text-slate-900 dark:text-white">Demo walkthrough: link a receipt to an expense</div>
+                          <div className="text-xs text-slate-600 dark:text-slate-300">This shows how receipts connect to expenses (and how the missing count updates).</div>
+                        </div>
+                        <button onClick={runDemoReceiptWalkthrough} className="px-4 py-2 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Start Demo</button>
+                      </div>
+                      <ol className="mt-3 list-decimal ml-5 text-xs text-slate-700 dark:text-slate-300 space-y-1">
+                        <li>We open a demo expense that has no receipt linked.</li>
+                        <li>Tap <span className="font-extrabold">Scan</span> to add a receipt, or pick one from the dropdown.</li>
+                        <li>Tap <span className="font-extrabold">Save</span>. The “Missing receipts” number will change.</li>
+                      </ol>
+                    </div>
+                  ) : null}
+
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={handleExportTaxLedgerCSV} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Tax Ledger CSV</button>
                     <button onClick={handleExportMileageCSV} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Mileage CSV</button>
@@ -6630,7 +6709,8 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     {(() => {
                       const requireReceipt = (settings.requireReceiptOverThreshold ?? true);
                       const threshold = Number(settings.receiptThreshold ?? 0);
-                      const missing = txForTaxYear.filter(t => t.type === 'expense' && requireReceipt && Number(t.amount || 0) >= threshold && !(t as any).receiptId).length;
+                      const computedMissing = txForTaxYear.filter(t => t.type === 'expense' && requireReceipt && Number(t.amount || 0) >= threshold && !(t as any).receiptId).length;
+                      const missing = (auditMissingReceipts ?? computedMissing);
                       const missingCategory = txForTaxYear.filter(t => !t.category?.trim()).length;
                       const badMileage = mileageForTaxYear.filter(m => !m.purpose?.trim() || Number(m.miles || 0) <= 0).length;
                       const linkedReceipts = txForTaxYear.filter(t => t.type === 'expense' && (t as any).receiptId).length;
@@ -6650,7 +6730,14 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
 
                       return (
                         <div className="space-y-0">
-                          <Row ok={missing === 0} label="Receipts linked (for required expenses)" detail={missing === 0 ? `Linked: ${linkedReceipts}/${totalExpenses} expense(s)` : `Missing receipts: ${missing}`} />
+                          <Row ok={missing === 0} label="Receipts linked (for required expenses)" detail={missing === 0 ? `Linked: ${linkedReceipts}/${totalExpenses} expense(s)` : (
+                            <span className="flex items-center gap-2">
+                              <span className={`${auditMissingPulse ? "animate-pulse " : ""}font-extrabold text-amber-700 dark:text-amber-400`}>Missing receipts: {missing}</span>
+                              {auditMissingPulse && auditMissingDelta !== 0 ? (
+                                <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${auditMissingDelta < 0 ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" : "bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300"}`}>{auditMissingDelta > 0 ? `+${auditMissingDelta}` : `${auditMissingDelta}`}</span>
+                              ) : null}
+                            </span>
+                          )} />
                           <Row ok={missingCategory === 0} label="Categories assigned" detail={missingCategory === 0 ? 'OK' : `Missing category: ${missingCategory}`} />
                           <Row ok={badMileage === 0} label="Mileage entries complete" detail={badMileage === 0 ? `Trips: ${mileageForTaxYear.length}` : `Incomplete trips: ${badMileage}`} />
                         </div>
@@ -8891,7 +8978,54 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                       <div><label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Category</label>{renderCategoryChips(activeItem.category, (cat) => setActiveItem(prev => ({ ...prev, category: cat })))}</div>
                       {activeTab === 'expense' && (
                         <div className="space-y-2">
-                          <label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Receipt</label>
+                          <div className="flex items-center justify-between">
+                            <label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-2 block pl-1">Receipt</label>
+                            {(settings.requireReceiptOverThreshold ?? true) && Number((activeItem as any).amount || 0) >= Number(settings.receiptThreshold ?? 0) ? (
+                              <span className={`text-[10px] font-extrabold uppercase tracking-widest px-2 py-1 rounded-full ${(activeItem as any).receiptId ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-300" : "bg-amber-100 text-amber-800 dark:bg-amber-500/10 dark:text-amber-300"}`}>
+                                {(activeItem as any).receiptId ? "Linked" : "Required"}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          {/* Linked receipt preview (thumbnail) */}
+                          {(activeItem as any).receiptId ? (
+                            <div className="flex gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const r = receipts.find(x => x.id === (activeItem as any).receiptId);
+                                  if (r) setViewingReceipt(r);
+                                }}
+                                className="w-20 h-28 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-950 flex items-center justify-center"
+                                title="Tap to view"
+                              >
+                                {receiptPreviewUrls[(activeItem as any).receiptId] ? (
+                                  <img src={receiptPreviewUrls[(activeItem as any).receiptId]} alt="Receipt thumbnail" className="w-full h-full object-cover" />
+                                ) : (
+                                  <div className="text-[10px] font-bold text-slate-500">No preview</div>
+                                )}
+                              </button>
+
+                              <div className="flex-1 min-w-0">
+                                {(() => {
+                                  const r = receipts.find(x => x.id === (activeItem as any).receiptId);
+                                  return (
+                                    <>
+                                      <div className="text-sm font-extrabold text-slate-900 dark:text-white truncate">{r?.note || "Linked receipt"}</div>
+                                      <div className="text-xs text-slate-600 dark:text-slate-300">{r?.date || ""}</div>
+                                      <div className="mt-2 flex flex-wrap gap-2">
+                                        <button type="button" onClick={() => { const rr = receipts.find(x => x.id === (activeItem as any).receiptId); if (rr) setViewingReceipt(rr); }} className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-[11px] font-extrabold uppercase tracking-widest hover:bg-slate-800 active:scale-95 transition-all">View</button>
+                                        <button type="button" onClick={() => handleDownloadReceipt((activeItem as any).receiptId)} className="px-3 py-1.5 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-[11px] font-extrabold uppercase tracking-widest hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 transition-all">Download</button>
+                                        <button type="button" onClick={() => setActiveItem(prev => ({ ...prev, receiptId: undefined }))} className="px-3 py-1.5 rounded-lg bg-rose-100 text-rose-700 dark:bg-rose-500/10 dark:text-rose-300 text-[11px] font-extrabold uppercase tracking-widest hover:opacity-90 active:scale-95 transition-all">Unlink</button>
+                                      </div>
+                                    </>
+                                  );
+                                })()}
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {/* Attach / Scan controls */}
                           <div className="flex gap-2">
                             <select value={(activeItem as any).receiptId || ''} onChange={e => setActiveItem(prev => ({ ...prev, receiptId: e.target.value || undefined }))} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-3 font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
                               <option value="">No receipt linked</option>
@@ -8901,12 +9035,17 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                             </select>
                             <button type="button" onClick={() => scanInputRef.current?.click()} className="px-4 py-3 rounded-lg bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-extrabold text-sm uppercase tracking-wider hover:bg-slate-300 dark:hover:bg-slate-700 active:scale-95 transition-all">Scan</button>
                           </div>
+
                           {(settings.requireReceiptOverThreshold ?? true) && Number((activeItem as any).amount || 0) >= Number(settings.receiptThreshold ?? 0) && !(activeItem as any).receiptId && (
-                            <div className="flex items-start gap-2 text-xs font-bold text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3">
+                            <div className="flex items-start gap-2 text-xs font-bold text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg p-3">
                               <AlertTriangle size={16} className="mt-0.5" />
-                              <div>Receipt required to save this expense. Link an existing receipt or scan a new one.</div>
+                              <div>
+                                This expense is marked as <span className="font-extrabold">receipt-required</span> (over your threshold). Scan or select a receipt, then Save.
+                              </div>
                             </div>
                           )}
+                        </div>
+                      )}
                         </div>
                       )}
 
