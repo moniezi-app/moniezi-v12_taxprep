@@ -1,7 +1,7 @@
 {
   "name": "moniezi-core",
   "private": true,
-  "version": "10.2.3-taxprep_demo_idb",
+  "version": "10.2.4-taxprep_demo",
   "type": "module",
   "scripts": {
     "dev": "vite",

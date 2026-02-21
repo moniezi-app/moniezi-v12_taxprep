@@ -80,12 +80,33 @@ export async function clearAllReceipts(): Promise<void> {
 }
 
 export async function dataUrlToBlob(dataUrl: string): Promise<{ blob: Blob; mimeType: string }> {
-  // data: mime;base64,....
-  const res = await fetch(dataUrl);
-  const blob = await res.blob();
-  const mimeType = blob.type || "image/jpeg";
-  return { blob, mimeType };
+  // Robust parsing without fetch() because some browsers block fetch(data:...) in certain contexts.
+  // Format: data:[<mime>][;base64],<payload>
+  const commaIdx = dataUrl.indexOf(",");
+  if (commaIdx < 0) {
+    return { blob: new Blob([], { type: "application/octet-stream" }), mimeType: "application/octet-stream" };
+  }
+
+  const header = dataUrl.slice(0, commaIdx);
+  const payload = dataUrl.slice(commaIdx + 1);
+
+  const mimeMatch = header.match(/^data:([^;]+)?/i);
+  const mimeType = (mimeMatch && mimeMatch[1]) ? mimeMatch[1] : "image/png";
+  const isBase64 = /;base64/i.test(header);
+
+  let bytes: Uint8Array;
+  if (isBase64) {
+    const binary = atob(payload);
+    bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  } else {
+    const text = decodeURIComponent(payload);
+    bytes = new TextEncoder().encode(text);
+  }
+
+  return { blob: new Blob([bytes], { type: mimeType }), mimeType };
 }
+
 
 export async function blobToDataUrl(blob: Blob): Promise<string> {
   return await new Promise((resolve, reject) => {
