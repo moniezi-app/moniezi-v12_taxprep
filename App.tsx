@@ -86,6 +86,7 @@ import { CATS_IN, CATS_OUT, CATS_BILLING, DEFAULT_PAY_PREFS, DB_KEY, TAX_CONSTAN
 import InsightsDashboard from './InsightsDashboard';
 import { getInsightCount } from './services/insightsEngine';
 import { putReceiptBlob, getReceiptBlob, deleteReceiptBlob, dataUrlToBlob, blobToDataUrl, clearAllReceipts } from './services/receiptStore';
+import { DEMO_RECEIPT_ASSETS } from './services/demoReceipts';
 import { loadAppState, saveAppState, clearAppState } from './services/appStore';
 // --- Utility: UUID Generator ---
 const generateId = (prefix: string) => {
@@ -981,6 +982,7 @@ export default function App() {
   // Scan Receipt State
   const [scanPreview, setScanPreview] = useState<string | null>(null);
   const [scanPreviewBlob, setScanPreviewBlob] = useState<Blob | null>(null);
+  const [scanMode, setScanMode] = useState<'receiptOnly' | 'expenseWithReceipt'>('receiptOnly');
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptType | null>(null);
   const scanInputRef = useRef<HTMLInputElement>(null);
 
@@ -2516,23 +2518,6 @@ export default function App() {
       setIsDrawerOpen(true);
   };
 
-  const runDemoReceiptWalkthrough = useCallback(() => {
-    const year = taxPrepYear;
-    const requireRcpt = settings.requireReceiptOverThreshold ?? true;
-    const threshold = Number(settings.receiptThreshold ?? 0);
-
-    // Choose an expense in the selected tax year that is missing a receipt (so the user sees the counter change).
-    const txForYear = transactions.filter(t => new Date(t.date).getFullYear() === year);
-    const missing = txForYear.filter(t => t.type === 'expense' && requireRcpt && Number((t as any).amount || 0) >= threshold && !(t as any).receiptId);
-    const target = missing[0] || txForYear.find(t => t.type === 'expense');
-
-    if (!target) return showToast("No expenses found for this tax year.", "info");
-
-    setCurrentPage(Page.Expenses);
-    handleEditItem(target);
-    showToast("Demo: attach a receipt using Scan or Select, then Save. Watch the missing-receipts number change.", "info");
-  }, [transactions, settings.requireReceiptOverThreshold, settings.receiptThreshold, taxPrepYear, handleEditItem]);
-
   const handleOpenTaxDrawer = () => {
     setDrawerMode('tax_payments'); setActiveTaxPayment({ type: 'Estimated', date: new Date().toISOString().split('T')[0], amount: 0, note: '' }); setIsDrawerOpen(true);
   };
@@ -2926,44 +2911,33 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
     const taxYearStr = String(currentYear);
     const DEMO_RECEIPT_THRESHOLD = 100;
 
-    // Create a small set of realistic demo receipts (stored in IndexedDB so preview/download works).
-    // These are static PNGs in /public/demo/receipts.
-    const demoReceiptAssets = [
-      { file: "/demo/receipts/grocery.png", note: "BIG MARKET — groceries" },
-      { file: "/demo/receipts/gas.png", note: "GAS STATION — fuel" },
-      { file: "/demo/receipts/office.png", note: "OFFICE DEPOT — supplies" },
-      { file: "/demo/receipts/restaurant.png", note: "COASTAL GRILL — meals" },
-      { file: "/demo/receipts/hardware.png", note: "HARDWARE STORE — materials" },
-    ];
-
-    const demoReceipts: Receipt[] = Array.from({ length: 10 }).map((_, i) => {
-      const asset = demoReceiptAssets[i % demoReceiptAssets.length];
-      const id = `rcpt_demo_${i + 1}`;
+    // Create 5 synthetic demo receipts (stored in IndexedDB so preview/download works).
+    // Images are embedded as data URLs to avoid external assets.
+    const demoReceipts: ReceiptType[] = DEMO_RECEIPT_ASSETS.map((asset, i) => {
+      const id = asset.id;
       return {
         id,
-        date: toISO(daysAgo(10 + i)),
+        date: toISO(daysAgo(9 + i * 4)),
         imageKey: id,
-        mimeType: "image/png",
-        note: `${asset.note} (demo #${i + 1})`,
+        mimeType: asset.mimeType,
+        note: asset.note,
       };
     });
 
-    // Ensure receipts are available in the dropdown.
+    // Ensure receipts are available in the dropdown + Home thumbnails.
     setReceipts(demoReceipts);
 
     // Save demo receipt blobs into the receipt DB so thumbnails/preview/download work.
     try {
-      for (let i = 0; i < demoReceipts.length; i++) {
-        const asset = demoReceiptAssets[i % demoReceiptAssets.length];
-        const resp = await fetch(asset.file);
-        const blob = await resp.blob();
-        await putReceiptBlob(demoReceipts[i].imageKey, blob, blob.type || "image/png");
+      for (const asset of DEMO_RECEIPT_ASSETS) {
+        const { blob, mimeType } = await dataUrlToBlob(asset.dataUrl);
+        await putReceiptBlob(asset.id, blob, mimeType || asset.mimeType);
       }
     } catch (e) {
       console.warn("Failed to seed demo receipt blobs", e);
     }
 
-    // Attach receiptIds to existing current-year expenses so the audit check can show a controlled missing count.
+// Attach receiptIds to existing current-year expenses so the audit check can show a controlled missing count.
     const baseTx = ([...demo.transactions] as any[]).map(t => ({ ...t }));
     const currentYearExpenses = baseTx.filter(
       t => t.type === "expense" && String(t.date || "").startsWith(taxYearStr)
@@ -4484,7 +4458,16 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
                   setActiveItem(prev => ({ ...prev, receiptId: id }));
               }
 
-              setScanPreview(null);
+              // If the user tapped "Expense" from Home, open a new expense with this receipt attached.
+              if (!isDrawerOpen && scanMode === 'expenseWithReceipt') {
+                  setCurrentPage(Page.Expenses);
+                  handleOpenFAB('expense');
+                  setTimeout(() => {
+                      setActiveItem(prev => ({ ...prev, receiptId: id, name: prev.name || newReceipt.note || '', date }));
+                  }, 0);
+              }
+
+              setScanMode('receiptOnly');
               setScanPreviewBlob(null);
               showToast("Receipt saved", "success");
           } catch (e) {
@@ -4534,7 +4517,7 @@ TIMELINE: Assumes 48-72hr feedback turnaround.`,
       const backup = {
         metadata: {
           appName: "MONIEZI",
-          version: "10.2.0-taxprep",
+          version: "10.2.3-taxprep_demo_idb",
           schemaVersion: 1,
           timestamp: new Date().toISOString(),
         },
@@ -5731,15 +5714,26 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 <h3 className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-slate-200 uppercase tracking-[0.10em] font-brand">Receipts</h3>
               </div>
               <div className="flex overflow-x-auto gap-3 pb-4 pt-1 px-1 -mx-1 custom-scrollbar snap-x">
-                <button onClick={() => scanInputRef.current?.click()} className="flex-shrink-0 w-24 h-24 bg-slate-200 dark:bg-slate-800 rounded-xl flex flex-col items-center justify-center gap-2 hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors border border-dashed border-slate-400 dark:border-slate-600 active:scale-95 snap-start">
+                <button onClick={() => { setScanMode('receiptOnly'); scanInputRef.current?.click(); }} className="flex-shrink-0 w-24 h-24 bg-slate-200 dark:bg-slate-800 rounded-xl flex flex-col items-center justify-center gap-2 hover:bg-slate-300 dark:hover:bg-slate-700 transition-colors border border-dashed border-slate-400 dark:border-slate-600 active:scale-95 snap-start">
                    <div className="bg-white dark:bg-slate-900 p-2.5 rounded-full shadow-sm text-slate-900 dark:text-white">
                      <Camera size={20} />
                    </div>
                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">Scan</span>
                 </button>
+                <button onClick={() => { setScanMode('expenseWithReceipt'); scanInputRef.current?.click(); }} className="flex-shrink-0 w-24 h-24 bg-emerald-50 dark:bg-emerald-500/10 rounded-xl flex flex-col items-center justify-center gap-2 hover:bg-emerald-100 dark:hover:bg-emerald-500/15 transition-colors border border-emerald-200 dark:border-emerald-700/40 active:scale-95 snap-start">
+                   <div className="bg-white dark:bg-slate-900 p-2.5 rounded-full shadow-sm text-emerald-700 dark:text-emerald-300">
+                     <PlusCircle size={20} />
+                   </div>
+                   <span className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">Expense</span>
+                </button>
                 {receipts.map(r => (
                    <div key={r.id} onClick={() => setViewingReceipt(r)} className="flex-shrink-0 w-24 h-24 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 overflow-hidden relative cursor-pointer shadow-sm group active:scale-95 transition-transform snap-start">
                       <img src={receiptPreviewUrls[r.id] || ''} className="w-full h-full object-cover" />
+                      {r.note ? (
+                        <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1">
+                          <div className="text-[9px] font-extrabold uppercase tracking-widest text-white truncate">{r.note}</div>
+                        </div>
+                      ) : null}
                       <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <Eye className="text-white drop-shadow-md" size={20} />
                       </div>
@@ -6680,22 +6674,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     </div>
                   </div>
 
-                  {isDemoData ? (
-                    <div className="mb-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-900/40 p-4">
-                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                        <div>
-                          <div className="text-sm font-extrabold text-slate-900 dark:text-white">Demo walkthrough: link a receipt to an expense</div>
-                          <div className="text-xs text-slate-600 dark:text-slate-300">This shows how receipts connect to expenses (and how the missing count updates).</div>
-                        </div>
-                        <button onClick={runDemoReceiptWalkthrough} className="px-4 py-2 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Start Demo</button>
-                      </div>
-                      <ol className="mt-3 list-decimal ml-5 text-xs text-slate-700 dark:text-slate-300 space-y-1">
-                        <li>We open a demo expense that has no receipt linked.</li>
-                        <li>Tap <span className="font-extrabold">Scan</span> to add a receipt, or pick one from the dropdown.</li>
-                        <li>Tap <span className="font-extrabold">Save</span>. The “Missing receipts” number will change.</li>
-                      </ol>
-                    </div>
-                  ) : null}
+                  
 
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                     <button onClick={handleExportTaxLedgerCSV} className="px-4 py-3 rounded-lg bg-slate-900 text-white font-extrabold uppercase tracking-widest text-xs hover:bg-slate-800 active:scale-95 transition-all">Export Tax Ledger CSV</button>
@@ -9025,9 +9004,36 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                             </div>
                           ) : null}
 
+                          {(activeItem as any).receiptId ? (
+                            <div className="space-y-1">
+                              <label className="text-sm font-bold text-slate-600 dark:text-slate-300 mb-1 block pl-1">Receipt name</label>
+                              <input
+                                value={(receipts.find(x => x.id === (activeItem as any).receiptId)?.note) || ''}
+                                onChange={e => {
+                                  const rid = (activeItem as any).receiptId as string;
+                                  const val = e.target.value;
+                                  setReceipts(prev => prev.map(r => r.id === rid ? ({ ...r, note: val }) : r));
+                                }}
+                                placeholder="Example: Office supplies"
+                                className="w-full bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-3 font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500/20"
+                              />
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-widest pl-1">Shown on receipts list and exports</div>
+                            </div>
+                          ) : null}
+
                           {/* Attach / Scan controls */}
                           <div className="flex gap-2">
-                            <select value={(activeItem as any).receiptId || ''} onChange={e => setActiveItem(prev => ({ ...prev, receiptId: e.target.value || undefined }))} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-3 font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
+                            <select value={(activeItem as any).receiptId || ''} onChange={e => {
+                              const rid = e.target.value || undefined;
+                              setActiveItem(prev => ({ ...prev, receiptId: rid }));
+                              if (rid) {
+                                const r = receipts.find(x => x.id === rid);
+                                const expName = String((activeItem as any).name || '').trim();
+                                if (expName && (!r?.note || !String(r.note).trim())) {
+                                  setReceipts(prev => prev.map(rr => rr.id === rid ? ({ ...rr, note: expName }) : rr));
+                                }
+                              }
+                            }} className="flex-1 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-0 rounded-lg px-4 py-3 font-bold text-sm outline-none focus:ring-2 focus:ring-blue-500/20">
                               <option value="">No receipt linked</option>
                               {receipts.map(r => (
                                 <option key={r.id} value={r.id}>{`${r.date}${r.note ? ' — ' + r.note : ''} (${r.id.slice(-6)})`}</option>
