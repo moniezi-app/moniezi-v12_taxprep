@@ -6013,7 +6013,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
 
              {filterPeriod !== 'all' && (
                 <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 mb-6 shadow-sm">
-                   <div className="grid grid-cols-3 gap-2">
+                   <div className="flex flex-wrap gap-3">
                      <div className="text-center py-2">
                        <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Paid</div>
                        <div className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">{formatCurrency.format(invoicePeriodTotals.paid)}</div>
@@ -6255,32 +6255,36 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
               </div>
 
               <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2 shadow-sm mt-3">
-                <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-wrap gap-3">
                   {[
-                    { key: 'pl', label: 'Profit & Loss', id: 'report-pl', Icon: BarChart3 },
-                    { key: 'taxsnapshot', label: 'Tax Snapshot', id: 'report-taxsnapshot', Icon: Calculator },
-                    { key: 'taxprep', label: 'Tax Prep', id: 'report-taxprep', Icon: FileText },
-                    { key: 'mileage', label: 'Mileage', id: 'report-mileage', Icon: Car },
-                    { key: 'planner', label: 'Planner', id: 'report-planner', Icon: ClipboardList },
-                  ].map((s) => (
-                    <button
-                      key={s.key}
-                      onClick={() => scrollToReportSection(s.key as any, s.id)}
-                      className={`flex flex-col items-center justify-center gap-1 px-3 py-3 rounded-lg font-bold text-xs uppercase tracking-wide transition-all active:scale-[0.99] ${
-                        activeReportSection === s.key
-                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-                      }`}
-                      aria-label={s.label}
-                    >
-                      <s.Icon size={18} />
-                      <span className="text-[10px] mt-0.5 text-center leading-tight whitespace-normal break-words">
-                        {s.label}
-                      </span>
-                    </button>
-                  ))}
-                  <div className="hidden sm:block" />
-                </div>
+  { key: 'pl', label: 'Profit & Loss', id: 'report-pl', Icon: BarChart3 },
+  { key: 'taxsnapshot', label: 'Tax Snapshot', id: 'report-taxsnapshot', Icon: Calculator },
+  { key: 'taxprep', label: 'Tax Prep', id: 'report-taxprep', Icon: FileText },
+  { key: 'mileage', label: 'Mileage', id: 'report-mileage', Icon: Car },
+  { key: 'planner', label: 'Planner', id: 'report-planner', Icon: ClipboardList },
+].map((s) => (
+  <button
+    key={s.key}
+    onClick={() => scrollToReportSection(s.key as any, s.id)}
+    className={`w-[calc(33.333%-0.5rem)] flex flex-col items-center justify-center gap-2 px-3 py-4 rounded-lg font-bold text-xs uppercase tracking-wide transition-all active:scale-[0.99] ${
+      activeReportSection === s.key
+        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+    }`}
+    aria-label={s.label}
+  >
+    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+      activeReportSection === s.key
+        ? 'bg-white/15 text-white'
+        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
+    }`}>
+      <s.Icon size={20} />
+    </div>
+    <span className="text-[11px] text-center leading-tight whitespace-normal break-words">
+      {s.label}
+    </span>
+  </button>
+))}                </div>
               </div>
 
               {/* Pro-Grade U.S. P&L Statement */}
@@ -9049,7 +9053,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
             <div className="bg-slate-50 dark:bg-slate-900 rounded-lg p-4 mb-6 space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-2 block uppercase">Quick Presets</label>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="flex flex-wrap gap-3">
                   <button onClick={() => {
                     const dates: string[] = [];
                     for (let i = 1; i <= 3; i++) {
