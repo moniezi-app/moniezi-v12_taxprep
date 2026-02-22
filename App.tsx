@@ -6254,27 +6254,32 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 Browse reports and exports below. Tap a button to jump to a section.
               </div>
 
-              <div className="sticky top-0 z-20 -mx-2 px-2 py-3 bg-slate-50/80 dark:bg-slate-950/70 backdrop-blur border-b border-slate-200/60 dark:border-slate-800/60 rounded-xl">
-                <div className="flex gap-2 overflow-x-auto">
+              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2 shadow-sm mt-3">
+                <div className="grid grid-cols-3 gap-2">
                   {[
-                    { key: 'pl', label: 'Profit & Loss', id: 'report-pl' },
-                    { key: 'taxsnapshot', label: 'Tax Snapshot', id: 'report-taxsnapshot' },
-                    { key: 'taxprep', label: 'Tax Prep', id: 'report-taxprep' },
-                    { key: 'mileage', label: 'Mileage', id: 'report-mileage' },
-                    { key: 'planner', label: 'Planner', id: 'report-planner' },
+                    { key: 'pl', label: 'Profit & Loss', id: 'report-pl', Icon: BarChart3 },
+                    { key: 'taxsnapshot', label: 'Tax Snapshot', id: 'report-taxsnapshot', Icon: Calculator },
+                    { key: 'taxprep', label: 'Tax Prep', id: 'report-taxprep', Icon: FileText },
+                    { key: 'mileage', label: 'Mileage', id: 'report-mileage', Icon: Car },
+                    { key: 'planner', label: 'Planner', id: 'report-planner', Icon: ClipboardList },
                   ].map((s) => (
                     <button
                       key={s.key}
                       onClick={() => scrollToReportSection(s.key as any, s.id)}
-                      className={`whitespace-nowrap px-3 py-2 rounded-full text-[11px] font-extrabold uppercase tracking-widest border transition-all active:scale-95 ${
+                      className={`flex flex-col items-center justify-center gap-1 px-3 py-3 rounded-lg font-bold text-xs uppercase tracking-wide transition-all active:scale-[0.99] ${
                         activeReportSection === s.key
-                          ? 'bg-blue-600 text-white border-blue-600'
-                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800'
+                          ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
                       }`}
+                      aria-label={s.label}
                     >
-                      {s.label}
+                      <s.Icon size={18} />
+                      <span className="text-[10px] mt-0.5 text-center leading-tight whitespace-normal break-words">
+                        {s.label}
+                      </span>
                     </button>
                   ))}
+                  <div className="hidden sm:block" />
                 </div>
               </div>
 
