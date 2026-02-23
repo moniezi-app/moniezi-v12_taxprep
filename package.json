@@ -1,7 +1,7 @@
 {
   "name": "moniezi-core",
   "private": true,
-  "version": "10.3.1-taxprep_demo_reports-menu-fix",
+  "version": "10.3.2-taxprep_demo_nolicense",
   "type": "module",
   "scripts": {
     "dev": "vite",

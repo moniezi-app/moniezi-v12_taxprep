@@ -790,8 +790,8 @@ export default function App() {
   };
   
   // License / Activation State
-  const LICENSE_STORAGE_KEY = 'moniezi_license';
-  const [isLicenseValid, setIsLicenseValid] = useState<boolean | null>(null); // null = checking, false = invalid, true = valid
+    const LICENSING_ENABLED = false; // TEMP: disable licensing gate for testing
+    const [isLicenseValid, setIsLicenseValid] = useState<boolean | null>(LICENSING_ENABLED ? null : true); // null = checking, false = invalid, true = valid
   const [licenseKey, setLicenseKey] = useState('');
   const [licenseError, setLicenseError] = useState('');
   const [isValidatingLicense, setIsValidatingLicense] = useState(false);
@@ -1201,7 +1201,19 @@ export default function App() {
 
   // License validation on app load
   useEffect(() => {
+    if (!LICENSING_ENABLED) {
+      setIsLicenseValid(true);
+      return;
+    }
+    if (!LICENSING_ENABLED) {
+      setIsLicenseValid(true);
+      return;
+    }
     const checkStoredLicense = async () => {
+      if (!LICENSING_ENABLED) {
+        setIsLicenseValid(true);
+        return;
+      }
       const stored = localStorage.getItem(LICENSE_STORAGE_KEY);
       if (stored) {
         try {
@@ -1234,6 +1246,8 @@ export default function App() {
 
   // Validate license with server (with offline grace window)
   const validateLicenseWithServer = async (key: string): Promise<boolean> => {
+    if (!LICENSING_ENABLED) return true;
+    if (!LICENSING_ENABLED) return true;
     const storedRaw = localStorage.getItem(LICENSE_STORAGE_KEY);
     const stored = storedRaw ? (() => { try { return JSON.parse(storedRaw); } catch { return null; } })() : null;
 
@@ -1299,6 +1313,12 @@ export default function App() {
 
   // Handle license activation
   const handleActivateLicense = async () => {
+    if (!LICENSING_ENABLED) {
+      setIsLicenseValid(true);
+      setLicenseError("");
+      showToast("Licensing is disabled in this build", "success");
+      return;
+    }
     if (!licenseKey.trim()) {
       setLicenseError('Please enter a license key');
       return;
@@ -4748,7 +4768,7 @@ const demoMileageTrips: MileageTrip[] = [
   }, [activeItem]);
 
   // Show loading state while checking license
-  if (isLicenseValid === null) {
+  if (LICENSING_ENABLED && isLicenseValid === null) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
         <div className="text-center">
@@ -4782,7 +4802,7 @@ const demoMileageTrips: MileageTrip[] = [
   }
 
   // Show license activation screen if not valid
-  if (isLicenseValid === false) {
+  if (LICENSING_ENABLED && isLicenseValid === false) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 flex items-center justify-center p-4">
         {/* Background decoration */}
@@ -8066,7 +8086,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                   <Trash2 size={18} />
                   <span className="text-[10px] md:text-sm mt-0.5 md:mt-0">Data</span>
                 </button>
-
+                {LICENSING_ENABLED && (
                 <button
                   onClick={() => setSettingsTab('license')}
                   className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
@@ -8078,6 +8098,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                   <Key size={18} />
                   <span className="text-[10px] md:text-sm mt-0.5 md:mt-0">License</span>
                 </button>
+                )}
               </div>
             </div>
 
@@ -8311,7 +8332,8 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
               )}
 
               {/* License Tab */}
-              {settingsTab === 'license' && (
+              {LICENSING_ENABLED && settingsTab === 'license' && (
+
                 <div className="bg-white dark:bg-slate-900 p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-lg animate-in fade-in slide-in-from-bottom-4">
                   <div className="flex items-center gap-3 mb-6">
                     <div className="w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-600 dark:text-amber-400 flex items-center justify-center">
@@ -8363,7 +8385,8 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                             <label className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Email</label>
                             <p className="text-sm text-emerald-900 dark:text-emerald-100 font-medium break-all">{licenseInfo.email}</p>
                           </div>
-                        )}
+                        
+              )}
                         {licenseInfo.purchaseDate && (
                           <div>
                             <label className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Purchased</label>
