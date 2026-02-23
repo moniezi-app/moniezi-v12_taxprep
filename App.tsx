@@ -703,18 +703,6 @@ export default function App() {
   const [invoiceQuickFilter, setInvoiceQuickFilter] = useState<'all' | 'unpaid' | 'overdue'>('all');
   const [estimateQuickFilter, setEstimateQuickFilter] = useState<'all' | 'draft' | 'sent' | 'accepted' | 'declined'>('all');
 
-  // Reports: section jump menu (Reports tab)
-  const [activeReportSection, setActiveReportSection] = useState<'pl' | 'taxsnapshot' | 'taxprep' | 'mileage' | 'planner'>('pl');
-  const scrollToReportSection = (key: 'pl' | 'taxsnapshot' | 'taxprep' | 'mileage' | 'planner', id: string) => {
-    setActiveReportSection(key);
-    // Allow the sticky menu to render its active style before scrolling.
-    setTimeout(() => {
-      const el = document.getElementById(id);
-      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
-  };
-
-
   const HOME_KPI_PERIOD_KEY = 'moniezi_home_kpi_period';
   type HomeKpiPeriod = 'ytd' | 'mtd' | '30d' | 'all';
   const [homeKpiPeriod, setHomeKpiPeriod] = useState<HomeKpiPeriod>(() => {
@@ -958,6 +946,14 @@ export default function App() {
   const [auditMissingPulse, setAuditMissingPulse] = useState<boolean>(false);
   const [newTrip, setNewTrip] = useState<any>({ date: new Date().toISOString().split('T')[0], miles: '', purpose: '', client: '', notes: '' });
   const taxSnapshotRef = useRef<HTMLDivElement>(null);
+
+  // Reports screen menu (Settings-style tiles)
+  const [reportsMenuSection, setReportsMenuSection] = useState<'pl'|'taxsnapshot'|'taxprep'|'mileage'|'planner'>('pl');
+  const scrollToReportSection = (id: string, section: typeof reportsMenuSection) => {
+    setReportsMenuSection(section);
+    const el = document.getElementById(id);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   // Keep Tax Prep audit counters reactive (so demo shows a visible before/after change)
   useEffect(() => {
@@ -6013,7 +6009,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
 
              {filterPeriod !== 'all' && (
                 <div className="bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 mb-6 shadow-sm">
-                   <div className="flex flex-wrap gap-3">
+                   <div className="grid grid-cols-3 gap-2">
                      <div className="text-center py-2">
                        <div className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">Paid</div>
                        <div className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate">{formatCurrency.format(invoicePeriodTotals.paid)}</div>
@@ -6249,47 +6245,83 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 </div>
                 <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-950 dark:text-white font-brand">Reports</h2>
               </div>
+              
+              
+              <p className="text-slate-600 dark:text-slate-300 font-semibold mb-3">
+                Choose a report section below.
+              </p>
 
-              <div className="text-sm text-slate-600 dark:text-slate-300 -mt-4">
-                Browse reports and exports below. Tap a button to jump to a section.
+              {/* Reports Menu (like Settings) */}
+              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2 shadow-sm mb-4">
+                <div className="grid grid-cols-3 md:grid-cols-5 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => scrollToReportSection('report-pl', 'pl')}
+                    className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
+                      reportsMenuSection === 'pl'
+                        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <BarChart3 size={18} />
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Profit &amp; Loss</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollToReportSection('report-taxsnapshot', 'taxsnapshot')}
+                    className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
+                      reportsMenuSection === 'taxsnapshot'
+                        ? 'bg-emerald-600 text-white shadow-lg shadow-emerald-600/30'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Calculator size={18} />
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Tax Snapshot</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollToReportSection('report-taxprep', 'taxprep')}
+                    className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
+                      reportsMenuSection === 'taxprep'
+                        ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Download size={18} />
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Tax Prep</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollToReportSection('report-mileage', 'mileage')}
+                    className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
+                      reportsMenuSection === 'mileage'
+                        ? 'bg-teal-600 text-white shadow-lg shadow-teal-600/30'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <Truck size={18} />
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Mileage</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => scrollToReportSection('report-planner', 'planner')}
+                    className={`flex flex-col md:flex-row items-center justify-center gap-1 md:gap-2 px-3 md:px-4 py-3 rounded-lg font-bold text-xs md:text-sm uppercase tracking-wide transition-all ${
+                      reportsMenuSection === 'planner'
+                        ? 'bg-slate-900 text-white shadow-lg shadow-slate-900/30'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    <ClipboardList size={18} />
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Planner</span>
+                  </button>
+                </div>
               </div>
-
-              <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 p-2 shadow-sm mt-3">
-                <div className="flex flex-wrap gap-3">
-                  {[
-  { key: 'pl', label: 'Profit & Loss', id: 'report-pl', Icon: BarChart3 },
-  { key: 'taxsnapshot', label: 'Tax Snapshot', id: 'report-taxsnapshot', Icon: Calculator },
-  { key: 'taxprep', label: 'Tax Prep', id: 'report-taxprep', Icon: FileText },
-  { key: 'mileage', label: 'Mileage', id: 'report-mileage', Icon: Car },
-  { key: 'planner', label: 'Planner', id: 'report-planner', Icon: ClipboardList },
-].map((s) => (
-  <button
-    key={s.key}
-    onClick={() => scrollToReportSection(s.key as any, s.id)}
-    className={`w-[calc(33.333%-0.5rem)] flex flex-col items-center justify-center gap-2 px-3 py-4 rounded-lg font-bold text-xs uppercase tracking-wide transition-all active:scale-[0.99] ${
-      activeReportSection === s.key
-        ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/30'
-        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'
-    }`}
-    aria-label={s.label}
-  >
-    <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
-      activeReportSection === s.key
-        ? 'bg-white/15 text-white'
-        : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400'
-    }`}>
-      <s.Icon size={20} />
-    </div>
-    <span className="text-[11px] text-center leading-tight whitespace-normal break-words">
-      {s.label}
-    </span>
-  </button>
-))}                </div>
-              </div>
-
-              {/* Pro-Grade U.S. P&L Statement */}
-
-              <div id="report-pl" className="bg-white dark:bg-slate-900 p-4 sm:p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl scroll-mt-24">
+{/* Pro-Grade U.S. P&L Statement */}
+              <div id="report-pl" className="bg-white dark:bg-slate-900 p-4 sm:p-6 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl">
                 {/* Controls Header - NOT part of PDF */}
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4 pb-4 border-b border-slate-200 dark:border-slate-700">
                   <div className="flex items-center gap-3">
@@ -6409,7 +6441,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 </div>
               </div>
 
-              <div id="report-taxsnapshot" ref={taxSnapshotRef} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white p-5 sm:p-8 rounded-lg shadow-xl relative overflow-hidden border border-slate-200 dark:border-slate-800 scroll-mt-24">
+              <div id="report-taxsnapshot" ref={taxSnapshotRef} className="bg-white dark:bg-slate-950 text-slate-900 dark:text-white p-5 sm:p-8 rounded-lg shadow-xl relative overflow-hidden border border-slate-200 dark:border-slate-800">
                 <div className="absolute top-0 right-0 w-80 h-80 bg-blue-50 dark:bg-blue-600/20 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 sm:mb-8 relative z-10">
                   <div className="flex items-center gap-2 sm:gap-3">
@@ -6454,7 +6486,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 
 
                 {/* Tax Prep Package (Exports) */}
-                <div id="report-taxprep" className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl scroll-mt-24">
+                <div id="report-taxprep" className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                     <div className="flex items-center gap-3">
                       <div className="p-2.5 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400">
@@ -6529,7 +6561,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                 </div>
 
                 {/* Mileage Tracker */}
-                <div id="report-mileage" className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl scroll-mt-24">
+                <div id="report-mileage" className="bg-white dark:bg-slate-950 p-5 sm:p-8 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl">
                   <div className="flex items-center gap-3 mb-6">
                     <div className="p-2.5 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-500/10 dark:text-emerald-400">
                       <Truck size={20} strokeWidth={2} />
@@ -6610,7 +6642,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                   </div>
                 </div>
 
-<div id="report-planner" className="bg-white dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-slate-800 shadow-lg rounded-3xl p-6 relative overflow-hidden scroll-mt-24">
+<div id="report-planner" className="bg-white dark:bg-slate-900/60 backdrop-blur-xl border border-slate-200/60 dark:border-slate-800 shadow-lg rounded-3xl p-6 relative overflow-hidden">
                   <div className="absolute -top-16 -right-16 w-48 h-48 rounded-full bg-blue-500/10 dark:bg-blue-400/10 opacity-0 dark:opacity-100 blur-2xl pointer-events-none" />
                   <button
                     onClick={() => setIsPlannerOpen(!isPlannerOpen)}
@@ -9053,7 +9085,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
             <div className="bg-slate-50 dark:bg-slate-900 rounded-lg p-4 mb-6 space-y-4">
               <div>
                 <label className="text-xs font-bold text-slate-600 dark:text-slate-300 mb-2 block uppercase">Quick Presets</label>
-                <div className="flex flex-wrap gap-3">
+                <div className="grid grid-cols-3 gap-2">
                   <button onClick={() => {
                     const dates: string[] = [];
                     for (let i = 1; i <= 3; i++) {
