@@ -6316,7 +6316,7 @@ html:not(.dark) .divide-slate-200 > :not([hidden]) ~ :not([hidden]) { border-col
                     }`}
                   >
                     <ClipboardList size={18} />
-                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Planner</span>
+                    <span className="text-[10px] md:text-sm mt-0.5 md:mt-0 text-center leading-tight">Tax Planner</span>
                   </button>
                 </div>
               </div>
